@@ -7,6 +7,16 @@
 
 namespace emu {
 
+// Auxiliar SR structure to ease CPU::SR initialization
+struct SR {
+    bool N{};
+    bool V{};
+    bool D{};
+    bool I{};
+    bool Z{};
+    bool C{};
+};
+
 struct CPU {
     word_t PC{};
     byte_t SP{};
@@ -48,6 +58,14 @@ struct CPU {
 
         constexpr SR() noexcept = default;
         constexpr SR(byte_t sr) noexcept { *this = sr; }
+        constexpr SR(::emu::SR sr) noexcept
+            : N{sr.N}
+            , V{sr.V}
+            , D{sr.D}
+            , I{sr.I}
+            , Z{sr.Z}
+            , C{sr.C}
+        {}
 
         constexpr auto operator<=>(SR const&) const noexcept = default;
     };

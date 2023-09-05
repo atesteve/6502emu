@@ -179,11 +179,12 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus, word_t entry_
                     if (not_taken_dest != block) {
                         block->next_not_taken = not_taken;
                         block->complete = true;
+                    } else {
+                        block->instructions.push_back(inst::Instruction{*not_taken, bus});
                     }
                 } else {
                     throw std::runtime_error{"Jump into middle of instruction"};
                 }
-                block->instructions.push_back(inst::Instruction{*not_taken, bus});
             }
         }
     }
