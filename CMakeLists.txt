@@ -35,14 +35,10 @@ set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
 find_package(fmt REQUIRED)
-target_link_libraries(${TARGET} PRIVATE fmt::fmt)
-target_link_libraries(${TARGET_TEST} PRIVATE fmt::fmt)
-target_link_libraries(${TARGET_COMMON} PRIVATE fmt::fmt)
+target_link_libraries(${TARGET_COMMON} PUBLIC fmt::fmt)
 
 find_package(spdlog REQUIRED)
-target_link_libraries(${TARGET} PRIVATE spdlog::spdlog)
-target_link_libraries(${TARGET_TEST} PRIVATE spdlog::spdlog)
-target_link_libraries(${TARGET_COMMON} PRIVATE spdlog::spdlog)
+target_link_libraries(${TARGET_COMMON} PUBLIC spdlog::spdlog)
 
 find_package(GTest REQUIRED)
 target_link_libraries(${TARGET_TEST} PRIVATE GTest::GTest)
@@ -62,15 +58,12 @@ llvm_map_components_to_libnames(llvm_libs -15) # This is a hack!!
 message(STATUS "LLVM libs: ${llvm_libs}")
 
 # Link against LLVM libraries
-target_link_libraries(${TARGET} PRIVATE ${llvm_libs})
-target_link_libraries(${TARGET_TEST} PRIVATE ${llvm_libs})
+target_link_libraries(${TARGET_COMMON} PUBLIC ${llvm_libs})
 
-set_property(TARGET ${TARGET} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-set_property(TARGET ${TARGET} PROPERTY CXX_STANDARD 23)
-set_property(TARGET ${TARGET_TEST} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-set_property(TARGET ${TARGET_TEST} PROPERTY CXX_STANDARD 23)
-set_property(TARGET ${TARGET_COMMON} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-set_property(TARGET ${TARGET_COMMON} PROPERTY CXX_STANDARD 23)
+set_target_properties(${TARGET} ${TARGET_TEST} ${TARGET_COMMON} PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION TRUE
+    CXX_STANDARD 23
+)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(${TARGET} PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
