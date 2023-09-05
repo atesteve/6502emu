@@ -43,7 +43,6 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> make_jit()
              llvm::JITEvaluatedSymbol::fromPointer(
                      write_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
     }));
-    jd.dump(llvm::errs());
 
     return jit;
 }

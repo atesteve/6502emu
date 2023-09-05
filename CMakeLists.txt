@@ -20,7 +20,7 @@ set(SOURCES
 
 set(TEST_SOURCES
     test/test-main.cpp
-    test/test.cpp
+    test/test-jit.cpp
 )
 
 add_executable(${TARGET} src/main.cpp)

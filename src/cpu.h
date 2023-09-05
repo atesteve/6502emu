@@ -58,7 +58,6 @@ public:
     byte_t read(word_t address) const;
     void write(word_t address, byte_t value);
 
-private:
     std::vector<byte_t> memory_space;
 };
 
