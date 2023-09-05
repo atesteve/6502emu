@@ -1,5 +1,8 @@
 #include "cpu.h"
 
+#include <fstream>
+#include <algorithm>
+
 namespace emu {
 
 Bus::Bus()

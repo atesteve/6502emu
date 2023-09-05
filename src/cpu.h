@@ -2,11 +2,8 @@
 
 #include "types.h"
 
-#include <algorithm>
 #include <vector>
-#include <fstream>
 #include <filesystem>
-#include <stdexcept>
 
 namespace emu {
 
@@ -16,7 +13,7 @@ struct CPU {
     byte_t A{};
     byte_t X{};
     byte_t Y{};
-    struct {
+    struct SR {
         bool N{};
         bool V{};
         bool D{};
@@ -24,20 +21,20 @@ struct CPU {
         bool Z{};
         bool C{};
 
-        byte_t get() const noexcept
+        constexpr operator byte_t() const noexcept
         {
             using namespace emu::literals;
-            return (static_cast<byte_t>(N) << 7)     // Negative
-                    | (static_cast<byte_t>(V) << 6)  // Overflow
-                    | (1_b << 5)                     // Unused, always 1
-                    | (1_b << 4)                     // Break, always 1
-                    | (static_cast<byte_t>(D) << 3)  // Decimal mode
-                    | (static_cast<byte_t>(I) << 2)  // Interrupt
-                    | (static_cast<byte_t>(Z) << 1)  // Zero
-                    | (static_cast<byte_t>(C) << 0); // Carry
+            return (static_cast<byte_t>(N) << 7) // Negative
+                | (static_cast<byte_t>(V) << 6)  // Overflow
+                | (1_b << 5)                     // Unused, always 1
+                | (1_b << 4)                     // Break, always 1
+                | (static_cast<byte_t>(D) << 3)  // Decimal mode
+                | (static_cast<byte_t>(I) << 2)  // Interrupt
+                | (static_cast<byte_t>(Z) << 1)  // Zero
+                | (static_cast<byte_t>(C) << 0); // Carry
         }
 
-        void set(byte_t new_SR) noexcept
+        constexpr auto& operator=(byte_t new_SR) noexcept
         {
             using namespace emu::literals;
             N = (new_SR & 0x80_b) != 0_b;
@@ -46,9 +43,18 @@ struct CPU {
             I = (new_SR & 0x04_b) != 0_b;
             Z = (new_SR & 0x02_b) != 0_b;
             C = (new_SR & 0x01_b) != 0_b;
+            return *this;
         }
 
-    } SR{};
+        constexpr SR() noexcept = default;
+        constexpr SR(byte_t sr) noexcept { *this = sr; }
+
+        constexpr auto operator<=>(SR const&) const noexcept = default;
+    };
+
+    SR SR{};
+
+    constexpr auto operator<=>(CPU const&) const noexcept = default;
 };
 
 class Bus {

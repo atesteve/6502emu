@@ -9,6 +9,7 @@
 #include <expected>
 #include <stdexcept>
 #include <unordered_set>
+#include <algorithm>
 
 using namespace emu::literals;
 
@@ -34,7 +35,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus, word_t entry_
 
     auto const get_inst_from_address = [&](control_block& block, word_t address) {
         auto ret = std::ranges::upper_bound(
-                block.instructions, address, std::less<>{}, &inst::Instruction::get_pc);
+            block.instructions, address, std::less<>{}, &inst::Instruction::get_pc);
         assert(ret != block.instructions.begin());
         return std::prev(ret);
     };
