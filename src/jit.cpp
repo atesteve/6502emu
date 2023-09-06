@@ -36,13 +36,17 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> make_jit()
     auto& jit_ptr = *jit;
     auto& jd = jit_ptr->getMainJITDylib();
     auto err = jd.define(llvm::orc::absoluteSymbols(llvm::orc::SymbolMap{
-            {jit_ptr->mangleAndIntern("read_bus"),
-             llvm::JITEvaluatedSymbol::fromPointer(
-                     read_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
-            {jit_ptr->mangleAndIntern("write_bus"),
-             llvm::JITEvaluatedSymbol::fromPointer(
-                     write_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
+        {jit_ptr->mangleAndIntern("read_bus"),
+         llvm::JITEvaluatedSymbol::fromPointer(
+             read_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
+        {jit_ptr->mangleAndIntern("write_bus"),
+         llvm::JITEvaluatedSymbol::fromPointer(
+             write_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
     }));
+
+    if (err) {
+        return err;
+    }
 
     return jit;
 }

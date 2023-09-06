@@ -217,9 +217,11 @@ uint64_t bin_logic_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t add
 
 void perform_bin_addition(CPU& cpu, byte_t op)
 {
-    auto const result = cpu.A + op + byte_t{cpu.SR.C};
-    cpu.SR.V = msb(cpu.A) == msb(op) && msb(result) != msb(op);
-    cpu.SR.C = result < cpu.A || (result == cpu.A && (op != 0_b || cpu.SR.C));
+    auto const result_s16 = sword_t{sbyte_t{cpu.A}} + sword_t{sbyte_t{op}} + sword_t{cpu.SR.C};
+    auto const result_u16 = word_t{cpu.A} + word_t{op} + word_t{cpu.SR.C};
+    auto const result = byte_t{result_u16};
+    cpu.SR.V = result_s16 > 127_sw || result_s16 < -128_sw;
+    cpu.SR.C = result_u16 > 0xff_w;
     assign_accumulator(cpu, result);
 }
 

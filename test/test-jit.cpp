@@ -24,6 +24,7 @@ struct ParamType {
     std::string name;
     std::vector<emu::byte_t> instructions;
     std::vector<MemData> data{};
+    std::vector<MemData> expected_data{};
     uint64_t expected_cycles;
     emu::word_t fn_address{0x55f0_w};
     emu::word_t return_address{0x1234_w};
@@ -134,6 +135,12 @@ TEST_P(TestJitCodegen, Test)
     expected_cpu.PC = params.return_address;
 
     EXPECT_EQ(_cpu, expected_cpu);
+
+    for (auto const& data : params.expected_data) {
+        EXPECT_TRUE(std::equal(data.data.cbegin(),
+                               data.data.cend(),
+                               _bus.memory_space.cbegin() + static_cast<size_t>(data.offset)));
+    }
 }
 
 static std::vector<ParamType> get_test_cases()
@@ -152,19 +159,133 @@ static std::vector<ParamType> get_test_cases()
             .expected_cpu_state = {.SR = 0xff_b},
         },
         {
+            .name = "Test RTI alternate flags",
+            .instructions = {},
+            .expected_cycles = 0,
+            .do_rti = true,
+            .expected_cpu_state = {.SR = 0xba_b},
+        },
+        {
             .name = "Test NOP",
             .instructions = {0xea_b},
             .expected_cycles = 2,
         },
+        {
+            .name = "Test STA zpg",
+            .instructions = {0x85_b, 0xaa_b},
+            .expected_data = {{.offset = 0xaa_w, .data = {0x55_b}}},
+            .expected_cycles = 3,
+            .initial_cpu_state = {.A = 0x55_b},
+            .expected_cpu_state = {.A = 0x55_b},
+        },
+        {
+            .name = "Test STA zpg,X",
+            .instructions = {0x95_b, 0xaa_b},
+            .expected_data = {{.offset = 0xbb_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+            .expected_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+        },
+        {
+            .name = "Test STA abs",
+            .instructions = {0x8d_b, 0xaa_b, 0x55_b},
+            .expected_data = {{.offset = 0x55aa_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.A = 0x55_b},
+            .expected_cpu_state = {.A = 0x55_b},
+        },
+        {
+            .name = "Test STA abs,X",
+            .instructions = {0x9d_b, 0xaa_b, 0x55_b},
+            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .expected_cycles = 5,
+            .initial_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+            .expected_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+        },
+        {
+            .name = "Test STA abs,Y",
+            .instructions = {0x99_b, 0xaa_b, 0x55_b},
+            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .expected_cycles = 5,
+            .initial_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
+            .expected_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
+        },
+        {
+            .name = "Test STA (indirect,X)",
+            .instructions = {0x81_b, 0xaa_b},
+            .data = {{.offset = 0xbb_w, .data = {0xaa_b, 0x55_b}}},
+            .expected_data = {{.offset = 0x55aa_w, .data = {0x55_b}}},
+            .expected_cycles = 6,
+            .initial_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+            .expected_cpu_state = {.A = 0x55_b, .X = 0x11_b},
+        },
+        {
+            .name = "Test STA (indirect),Y",
+            .instructions = {0x91_b, 0xaa_b},
+            .data = {{.offset = 0xaa_w, .data = {0xaa_b, 0x55_b}}},
+            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .expected_cycles = 6,
+            .initial_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
+            .expected_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
+        },
+        {
+            .name = "Test STX zpg",
+            .instructions = {0x86_b, 0xaa_b},
+            .expected_data = {{.offset = 0xaa_w, .data = {0x55_b}}},
+            .expected_cycles = 3,
+            .initial_cpu_state = {.X = 0x55_b},
+            .expected_cpu_state = {.X = 0x55_b},
+        },
+        {
+            .name = "Test STX zpg,Y",
+            .instructions = {0x96_b, 0xaa_b},
+            .expected_data = {{.offset = 0xbb_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.X = 0x55_b, .Y = 0x11_b},
+            .expected_cpu_state = {.X = 0x55_b, .Y = 0x11_b},
+        },
+        {
+            .name = "Test STX abs",
+            .instructions = {0x8e_b, 0xaa_b, 0x55_b},
+            .expected_data = {{.offset = 0x55aa_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.X = 0x55_b},
+            .expected_cpu_state = {.X = 0x55_b},
+        },
+        {
+            .name = "Test STY zpg",
+            .instructions = {0x84_b, 0xaa_b},
+            .expected_data = {{.offset = 0xaa_w, .data = {0x55_b}}},
+            .expected_cycles = 3,
+            .initial_cpu_state = {.Y = 0x55_b},
+            .expected_cpu_state = {.Y = 0x55_b},
+        },
+        {
+            .name = "Test STY zpg,X",
+            .instructions = {0x94_b, 0xaa_b},
+            .expected_data = {{.offset = 0xbb_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.X = 0x11_b, .Y = 0x55_b},
+            .expected_cpu_state = {.X = 0x11_b, .Y = 0x55_b},
+        },
+        {
+            .name = "Test STY abs",
+            .instructions = {0x8c_b, 0xaa_b, 0x55_b},
+            .expected_data = {{.offset = 0x55aa_w, .data = {0x55_b}}},
+            .expected_cycles = 4,
+            .initial_cpu_state = {.Y = 0x55_b},
+            .expected_cpu_state = {.Y = 0x55_b},
+        },
     };
 
-    auto const add_logic_instruction_tests = [&ret](std::string_view name,
-                                                    std::string_view condition,
-                                                    std::vector<emu::byte_t> const& opcodes,
-                                                    emu::byte_t param_a,
-                                                    emu::byte_t param_b,
-                                                    emu::byte_t result,
-                                                    emu::SR expected_flags = {}) {
+    auto const add_group_one_tests = [&ret](std::string_view name,
+                                            std::string_view condition,
+                                            std::array<emu::byte_t, 8> const& opcodes,
+                                            emu::byte_t param_a,
+                                            emu::byte_t param_b,
+                                            emu::byte_t result,
+                                            emu::SR initial_flags = {},
+                                            emu::SR expected_flags = {}) {
         auto const op_imm = opcodes[0];
         auto const op_zpg = opcodes[1];
         auto const op_zpg_X = opcodes[2];
@@ -181,7 +302,7 @@ static std::vector<ParamType> get_test_cases()
                     .name = fmt::format("Test {} imm, {}", name, condition),
                     .instructions = {op_imm, param_b},
                     .expected_cycles = 2,
-                    .initial_cpu_state = {.A = param_a},
+                    .initial_cpu_state = {.A = param_a, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .SR = expected_flags},
                 },
                 {
@@ -189,23 +310,23 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_zpg, 0x55_b},
                     .data = {{.offset = 0x55_w, .data = {param_b}}},
                     .expected_cycles = 3,
-                    .initial_cpu_state = {.A = param_a},
+                    .initial_cpu_state = {.A = param_a, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} zpg,X - no overflow, {}", name, condition),
+                    .name = fmt::format("Test {} zpg,X - no addr ovf, {}", name, condition),
                     .instructions = {op_zpg_X, 0x55_b},
                     .data = {{.offset = 0x65_w, .data = {param_b}}},
                     .expected_cycles = 4,
-                    .initial_cpu_state = {.A = param_a, .X = 0x10_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0x10_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0x10_b, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} zpg,X - overflow, {}", name, condition),
+                    .name = fmt::format("Test {} zpg,X - addr ovf, {}", name, condition),
                     .instructions = {op_zpg_X, 0x55_b},
                     .data = {{.offset = 0x45_w, .data = {param_b}}},
                     .expected_cycles = 4,
-                    .initial_cpu_state = {.A = param_a, .X = 0xf0_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0xf0_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0xf0_b, .SR = expected_flags},
                 },
                 {
@@ -213,7 +334,7 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_abs, 0xbc_b, 0x9a_b},
                     .data = {{.offset = 0x9abc_w, .data = {param_b}}},
                     .expected_cycles = 4,
-                    .initial_cpu_state = {.A = param_a},
+                    .initial_cpu_state = {.A = param_a, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .SR = expected_flags},
                 },
                 {
@@ -222,7 +343,7 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_abs_X, 0xbc_b, 0x9a_b},
                     .data = {{.offset = 0x9adc_w, .data = {param_b}}},
                     .expected_cycles = 4,
-                    .initial_cpu_state = {.A = param_a, .X = 0x20_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0x20_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0x20_b, .SR = expected_flags},
                 },
                 {
@@ -231,7 +352,7 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_abs_X, 0xbc_b, 0x9a_b},
                     .data = {{.offset = 0x9b0c_w, .data = {param_b}}},
                     .expected_cycles = 5,
-                    .initial_cpu_state = {.A = param_a, .X = 0x50_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0x50_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0x50_b, .SR = expected_flags},
                 },
                 {
@@ -240,7 +361,7 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_abs_Y, 0xbc_b, 0x9a_b},
                     .data = {{.offset = 0x9adc_w, .data = {param_b}}},
                     .expected_cycles = 4,
-                    .initial_cpu_state = {.A = param_a, .Y = 0x20_b},
+                    .initial_cpu_state = {.A = param_a, .Y = 0x20_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .Y = 0x20_b, .SR = expected_flags},
                 },
                 {
@@ -249,63 +370,63 @@ static std::vector<ParamType> get_test_cases()
                     .instructions = {op_abs_Y, 0xbc_b, 0x9a_b},
                     .data = {{.offset = 0x9b0c_w, .data = {param_b}}},
                     .expected_cycles = 5,
-                    .initial_cpu_state = {.A = param_a, .Y = 0x50_b},
+                    .initial_cpu_state = {.A = param_a, .Y = 0x50_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .Y = 0x50_b, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} (indirect,X) - no overflow, {}", name, condition),
+                    .name = fmt::format("Test {} (indirect,X) - no addr ovf, {}", name, condition),
                     .instructions = {op_X_ind, 0x55_b},
                     .data = {{.offset = 0x75_w, .data = {0xbc_b, 0x9a_b}},
                              {.offset = 0x9abc_w, .data = {param_b}}},
                     .expected_cycles = 6,
-                    .initial_cpu_state = {.A = param_a, .X = 0x20_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0x20_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0x20_b, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} (indirect,X) - overflow, {}", name, condition),
+                    .name = fmt::format("Test {} (indirect,X) - addr ovf, {}", name, condition),
                     .instructions = {op_X_ind, 0x55_b},
                     .data = {{.offset = 0x45_w, .data = {0xbc_b, 0x9a_b}},
                              {.offset = 0x9abc_w, .data = {param_b}}},
                     .expected_cycles = 6,
-                    .initial_cpu_state = {.A = param_a, .X = 0xf0_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0xf0_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0xf0_b, .SR = expected_flags},
                 },
                 {
                     .name =
-                        fmt::format("Test {} (indirect,X) - overflow at edge, {}", name, condition),
+                        fmt::format("Test {} (indirect,X) - addr ovf at edge, {}", name, condition),
                     .instructions = {op_X_ind, 0x55_b},
                     .data = {{.offset = 0xff_w, .data = {0xbc_b}},
                              {.offset = 0x00_w, .data = {0x9a_b}},
                              {.offset = 0x9abc_w, .data = {param_b}}},
                     .expected_cycles = 6,
-                    .initial_cpu_state = {.A = param_a, .X = 0xaa_b},
+                    .initial_cpu_state = {.A = param_a, .X = 0xaa_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .X = 0xaa_b, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} (indirect),Y - no overflow, {}", name, condition),
+                    .name = fmt::format("Test {} (indirect),Y - no addr ovf, {}", name, condition),
                     .instructions = {op_ind_Y, 0x55_b},
                     .data = {{.offset = 0x55_w, .data = {0xbc_b, 0x9a_b}},
                              {.offset = 0x9adc_w, .data = {param_b}}},
                     .expected_cycles = 5,
-                    .initial_cpu_state = {.A = param_a, .Y = 0x20_b},
+                    .initial_cpu_state = {.A = param_a, .Y = 0x20_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .Y = 0x20_b, .SR = expected_flags},
                 },
                 {
-                    .name = fmt::format("Test {} (indirect),Y - overflow, {}", name, condition),
+                    .name = fmt::format("Test {} (indirect),Y - addr ovf, {}", name, condition),
                     .instructions = {op_ind_Y, 0x55_b},
                     .data = {{.offset = 0x55_w, .data = {0xbc_b, 0x9a_b}},
                              {.offset = 0x9b0c_w, .data = {param_b}}},
                     .expected_cycles = 6,
-                    .initial_cpu_state = {.A = param_a, .Y = 0x50_b},
+                    .initial_cpu_state = {.A = param_a, .Y = 0x50_b, .SR = initial_flags},
                     .expected_cpu_state = {.A = result, .Y = 0x50_b, .SR = expected_flags},
                 },
             });
     };
 
-    auto const add_conditional_branch_instruction_tests = [&ret](std::string_view name,
-                                                                 emu::byte_t opcode,
-                                                                 emu::SR taken_condition,
-                                                                 emu::SR not_taken_condition) {
+    auto const add_cond_branch_inst_tests = [&ret](std::string_view name,
+                                                   emu::byte_t opcode,
+                                                   emu::SR taken_condition,
+                                                   emu::SR not_taken_condition) {
         ret.insert(ret.end(),
                    {
                        {
@@ -375,30 +496,65 @@ static std::vector<ParamType> get_test_cases()
                    });
     };
 
-    std::vector const and_opcodes{0x29_b, 0x25_b, 0x35_b, 0x2d_b, 0x3d_b, 0x39_b, 0x21_b, 0x31_b};
-    std::vector const ora_opcodes{0x09_b, 0x05_b, 0x15_b, 0x0d_b, 0x1d_b, 0x19_b, 0x01_b, 0x11_b};
-    std::vector const eor_opcodes{0x49_b, 0x45_b, 0x55_b, 0x4d_b, 0x5d_b, 0x59_b, 0x41_b, 0x51_b};
+    std::array const and_opcodes{0x29_b, 0x25_b, 0x35_b, 0x2d_b, 0x3d_b, 0x39_b, 0x21_b, 0x31_b};
+    std::array const ora_opcodes{0x09_b, 0x05_b, 0x15_b, 0x0d_b, 0x1d_b, 0x19_b, 0x01_b, 0x11_b};
+    std::array const eor_opcodes{0x49_b, 0x45_b, 0x55_b, 0x4d_b, 0x5d_b, 0x59_b, 0x41_b, 0x51_b};
+    std::array const lda_opcodes{0xa9_b, 0xa5_b, 0xb5_b, 0xad_b, 0xbd_b, 0xb9_b, 0xa1_b, 0xb1_b};
+    std::array const adc_opcodes{0x69_b, 0x65_b, 0x75_b, 0x6d_b, 0x7d_b, 0x79_b, 0x61_b, 0x71_b};
+    std::array const sbc_opcodes{0xe9_b, 0xe5_b, 0xf5_b, 0xed_b, 0xfd_b, 0xf9_b, 0xe1_b, 0xf1_b};
 
-    add_logic_instruction_tests("AND", "no flags", and_opcodes, 0xfc_b, 0x3f_b, 0x3c_b);
-    add_logic_instruction_tests("AND", "Z flag", and_opcodes, 0x55_b, 0xaa_b, 0x00_b, {.Z = true});
-    add_logic_instruction_tests("AND", "N flag", and_opcodes, 0xd5_b, 0xaa_b, 0x80_b, {.N = true});
+    // clang-format off
+    #define Z .Z=true
+    #define N .N=true
+    #define C .C=true
+    #define V .V=true
 
-    add_logic_instruction_tests("ORA", "no flags", ora_opcodes, 0x54_b, 0x2c_b, 0x7c_b);
-    add_logic_instruction_tests("ORA", "Z flag", ora_opcodes, 0x00_b, 0x00_b, 0x00_b, {.Z = true});
-    add_logic_instruction_tests("ORA", "N flag", ora_opcodes, 0xd4_b, 0x2c_b, 0xfc_b, {.N = true});
+    add_group_one_tests("AND", "no flags", and_opcodes, 0xfc_b, 0x3f_b, 0x3c_b);
+    add_group_one_tests("AND", "Z flag",   and_opcodes, 0x55_b, 0xaa_b, 0x00_b, {}, {Z});
+    add_group_one_tests("AND", "N flag",   and_opcodes, 0xd5_b, 0xaa_b, 0x80_b, {}, {N});
 
-    add_logic_instruction_tests("EOR", "no flags", eor_opcodes, 0x6c_b, 0x36_b, 0x5a_b);
-    add_logic_instruction_tests("EOR", "Z flag", eor_opcodes, 0xaa_b, 0xaa_b, 0x00_b, {.Z = true});
-    add_logic_instruction_tests("EOR", "N flag", eor_opcodes, 0x6c_b, 0xb6_b, 0xda_b, {.N = true});
+    add_group_one_tests("ORA", "no flags", ora_opcodes, 0x54_b, 0x2c_b, 0x7c_b);
+    add_group_one_tests("ORA", "Z flag",   ora_opcodes, 0x00_b, 0x00_b, 0x00_b, {}, {Z});
+    add_group_one_tests("ORA", "N flag",   ora_opcodes, 0xd4_b, 0x2c_b, 0xfc_b, {}, {N});
 
-    add_conditional_branch_instruction_tests("BCC", 0x90_b, {}, {.C = true});
-    add_conditional_branch_instruction_tests("BCS", 0xb0_b, {.C = true}, {});
-    add_conditional_branch_instruction_tests("BEQ", 0xf0_b, {.Z = true}, {});
-    add_conditional_branch_instruction_tests("BMI", 0x30_b, {.N = true}, {});
-    add_conditional_branch_instruction_tests("BNE", 0xd0_b, {}, {.Z = true});
-    add_conditional_branch_instruction_tests("BPL", 0x10_b, {}, {.N = true});
-    add_conditional_branch_instruction_tests("BVC", 0x50_b, {}, {.V = true});
-    add_conditional_branch_instruction_tests("BVS", 0x70_b, {.V = true}, {});
+    add_group_one_tests("EOR", "no flags", eor_opcodes, 0x6c_b, 0x36_b, 0x5a_b);
+    add_group_one_tests("EOR", "Z flag",   eor_opcodes, 0xaa_b, 0xaa_b, 0x00_b, {}, {Z});
+    add_group_one_tests("EOR", "N flag",   eor_opcodes, 0x6c_b, 0xb6_b, 0xda_b, {}, {N});
+
+    add_group_one_tests("LDA", "no flags", lda_opcodes, 0xaa_b, 0x55_b, 0x55_b);
+    add_group_one_tests("LDA", "Z flag",   lda_opcodes, 0x55_b, 0x00_b, 0x00_b, {}, {Z});
+    add_group_one_tests("LDA", "N flag",   lda_opcodes, 0x55_b, 0x80_b, 0x80_b, {}, {N});
+
+    add_group_one_tests("ADC", "no carry",        adc_opcodes, 0x12_b, 0x34_b, 0x46_b);
+    add_group_one_tests("ADC", "carry in",        adc_opcodes, 0x12_b, 0x34_b, 0x47_b, {C}, {});
+    add_group_one_tests("ADC", "carry out",       adc_opcodes, 0xaa_b, 0x66_b, 0x10_b, {},  {C});
+    add_group_one_tests("ADC", "carry in/out",    adc_opcodes, 0xaa_b, 0x55_b, 0x00_b, {C}, {Z, C});
+    add_group_one_tests("ADC", "zero, carry out", adc_opcodes, 0xaa_b, 0x56_b, 0x00_b, {},  {Z, C});
+    add_group_one_tests("ADC", "positive ovf",    adc_opcodes, 0x75_b, 0x56_b, 0xcb_b, {},  {N, V});
+    add_group_one_tests("ADC", "negative ovf",    adc_opcodes, 0x8b_b, 0xaa_b, 0x35_b, {},  {V, C});
+
+    add_group_one_tests("SBC", "no borrow",     sbc_opcodes, 0x34_b, 0x12_b, 0x22_b, {C}, {C});
+    add_group_one_tests("SBC", "borrow in",     sbc_opcodes, 0x34_b, 0x12_b, 0x21_b, {},  {C});
+    add_group_one_tests("SBC", "borrow out",    sbc_opcodes, 0x66_b, 0x67_b, 0xff_b, {C}, {N});
+    add_group_one_tests("SBC", "borrow in/out", sbc_opcodes, 0xaa_b, 0xaa_b, 0xff_b, {},  {N});
+    add_group_one_tests("SBC", "borrow, zero",  sbc_opcodes, 0xaa_b, 0xa9_b, 0x00_b, {},  {Z, C});
+    add_group_one_tests("SBC", "positive ovf",  sbc_opcodes, 0x7f_b, 0xff_b, 0x80_b, {C}, {N, V});
+    add_group_one_tests("SBC", "negative ovf",  sbc_opcodes, 0x81_b, 0x01_b, 0x7f_b, {},  {V, C});
+
+    add_cond_branch_inst_tests("BCC", 0x90_b, {},  {C});
+    add_cond_branch_inst_tests("BCS", 0xb0_b, {C}, {});
+    add_cond_branch_inst_tests("BNE", 0xd0_b, {},  {Z});
+    add_cond_branch_inst_tests("BEQ", 0xf0_b, {Z}, {});
+    add_cond_branch_inst_tests("BPL", 0x10_b, {},  {N});
+    add_cond_branch_inst_tests("BMI", 0x30_b, {N}, {});
+    add_cond_branch_inst_tests("BVC", 0x50_b, {},  {V});
+    add_cond_branch_inst_tests("BVS", 0x70_b, {V}, {});
+
+    #undef Z
+    #undef N
+    #undef C
+    #undef V
+    // clanf-format on
 
     return ret;
 }
