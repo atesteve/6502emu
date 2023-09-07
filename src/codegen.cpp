@@ -462,7 +462,8 @@ llvm::Value* bin_logic_op(Context const& c, build_bin_fn_t bin_fn, addr_fn_t add
     return nullptr;
 }
 
-using shift_left_t = decltype([](Context const& c, llvm::Value* val, llvm::Value* shift_in) {
+auto shift_left(Context const& c, llvm::Value* val, llvm::Value* shift_in)
+{
     auto* const result_tmp = c.builder->CreateShl(val, 1);
     auto* const carry_bit = c.builder->CreateAnd(val, int_const(c, 0x80_b));
     auto* const carry_flag =
@@ -470,9 +471,10 @@ using shift_left_t = decltype([](Context const& c, llvm::Value* val, llvm::Value
     auto* const shift_in_u8 = c.builder->CreateZExt(shift_in, int_type<uint8_t>(c));
     auto* const result = c.builder->CreateOr(result_tmp, shift_in_u8);
     return std::make_pair(result, carry_flag);
-});
+}
 
-using shift_right_t = decltype([](Context const& c, llvm::Value* val, llvm::Value* shift_in) {
+auto shift_right(Context const& c, llvm::Value* val, llvm::Value* shift_in)
+{
     auto* const result_tmp = c.builder->CreateLShr(val, 1);
     auto* const carry_bit = c.builder->CreateAnd(val, int_const(c, 1_b));
     auto* const carry_flag = c.builder->CreateTrunc(carry_bit, int_type<bool>(c));
@@ -480,51 +482,36 @@ using shift_right_t = decltype([](Context const& c, llvm::Value* val, llvm::Valu
     auto* const shift_in_left = c.builder->CreateShl(shift_in_u8, 7);
     auto* const result = c.builder->CreateOr(result_tmp, shift_in_left);
     return std::make_pair(result, carry_flag);
-});
+}
 
-template<typename ShiftOp>
-llvm::Value* shift_mem_op(Context const& c, addr_fn_t addr_mode)
+using shift_fn_t = std::pair<llvm::Value*, llvm::Value*> (*)(Context const& c,
+                                                             llvm::Value* value,
+                                                             llvm::Value* shift_in);
+
+llvm::Value* shift_mem_op(Context const& c,
+                          shift_fn_t fn,
+                          bool roll,
+                          bool add_extra_cycle,
+                          addr_fn_t addr_mode)
 {
     auto const [addr, op, cycles] = addr_mode(c, true);
-    auto const [result, carry_flag] = ShiftOp{}(c, op, int_const(c, false));
+    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, FlagOffset::C))
+                                : static_cast<llvm::Value*>(int_const(c, false));
+    auto const [result, carry_flag] = fn(c, op, shift_in);
     store_flag(c, FlagOffset::C, carry_flag);
     write_bus(c, addr, result);
     set_n_z(c, result);
-    add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
+    add_cycle_counter(
+        c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, add_extra_cycle ? 4 : 3)));
     return nullptr;
 }
 
-template<typename ShiftOp>
-llvm::Value* shift_A_op(Context const& c)
+llvm::Value* shift_A_op(Context const& c, shift_fn_t fn, bool roll)
 {
     auto* const a_reg = load_reg(c, RegOffset::A);
-    auto const [result, carry_flag] = ShiftOp{}(c, a_reg, int_const(c, false));
-    store_flag(c, FlagOffset::C, carry_flag);
-    store_reg(c, RegOffset::A, result);
-    set_n_z(c, result);
-    add_cycle_counter(c, int_const<uint64_t>(c, 2));
-    return nullptr;
-}
-
-template<typename ShiftOp>
-llvm::Value* roll_mem_op(Context const& c, addr_fn_t addr_mode)
-{
-    auto const [addr, op, cycles] = addr_mode(c, true);
-    auto* const c_flag = load_flag(c, FlagOffset::C);
-    auto const [result, carry_flag] = ShiftOp{}(c, op, c_flag);
-    store_flag(c, FlagOffset::C, carry_flag);
-    write_bus(c, addr, result);
-    set_n_z(c, result);
-    add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
-    return nullptr;
-}
-
-template<typename ShiftOp>
-llvm::Value* roll_A_op(Context const& c)
-{
-    auto* const a_reg = load_reg(c, RegOffset::A);
-    auto* const c_flag = load_flag(c, FlagOffset::C);
-    auto const [result, carry_flag] = ShiftOp{}(c, a_reg, c_flag);
+    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, FlagOffset::C))
+                                : static_cast<llvm::Value*>(int_const(c, false));
+    auto const [result, carry_flag] = fn(c, a_reg, shift_in);
     store_flag(c, FlagOffset::C, carry_flag);
     store_reg(c, RegOffset::A, result);
     set_n_z(c, result);
@@ -706,29 +693,29 @@ llvm::Value* EOR_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuild
 llvm::Value* EOR_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_Y); }
 llvm::Value* EOR_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_X); }
 
-llvm::Value* ASL_A(Context const& c)     { return shift_A_op<shift_left_t>(c); }
-llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_zpg); }
-llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_abs); }
-llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_zpg_X); }
-llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_abs_X); }
+llvm::Value* ASL_A(Context const& c)     { return shift_A_op(c, shift_left, false); }
+llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, false, false, addr_zpg); }
+llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op(c, shift_left, false, false, addr_abs); }
+llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, false, false, addr_zpg_X); }
+llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, false, true, addr_abs_X); }
 
-llvm::Value* LSR_A(Context const& c)     { return shift_A_op<shift_right_t>(c); }
-llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_zpg); }
-llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_abs); }
-llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_zpg_X); }
-llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_abs_X); }
+llvm::Value* LSR_A(Context const& c)     { return shift_A_op(c, shift_right, false); }
+llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, false, false, addr_zpg); }
+llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op(c, shift_right, false, false, addr_abs); }
+llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, false, false, addr_zpg_X); }
+llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, false, true, addr_abs_X); }
 
-llvm::Value* ROL_A(Context const& c)     { return roll_A_op<shift_left_t>(c); }
-llvm::Value* ROL_zpg(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_zpg); }
-llvm::Value* ROL_abs(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_abs); }
-llvm::Value* ROL_zpg_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_zpg_X); }
-llvm::Value* ROL_abs_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_abs_X); }
+llvm::Value* ROL_A(Context const& c)     { return shift_A_op(c, shift_left, true); }
+llvm::Value* ROL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, true, false, addr_zpg); }
+llvm::Value* ROL_abs(Context const& c)   { return shift_mem_op(c, shift_left, true, false, addr_abs); }
+llvm::Value* ROL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, true, false, addr_zpg_X); }
+llvm::Value* ROL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, true, true, addr_abs_X); }
 
-llvm::Value* ROR_A(Context const& c)     { return roll_A_op<shift_right_t>(c); }
-llvm::Value* ROR_zpg(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_zpg); }
-llvm::Value* ROR_abs(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_abs); }
-llvm::Value* ROR_zpg_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_zpg_X); }
-llvm::Value* ROR_abs_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_abs_X); }
+llvm::Value* ROR_A(Context const& c)     { return shift_A_op(c, shift_right, true); }
+llvm::Value* ROR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, true, false, addr_zpg); }
+llvm::Value* ROR_abs(Context const& c)   { return shift_mem_op(c, shift_right, true, false, addr_abs); }
+llvm::Value* ROR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, true, false, addr_zpg_X); }
+llvm::Value* ROR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, true, true, addr_abs_X); }
 
 llvm::Value* ADC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, true); }
 llvm::Value* ADC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   true); }

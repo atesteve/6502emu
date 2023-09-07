@@ -496,12 +496,76 @@ static std::vector<ParamType> get_test_cases()
                    });
     };
 
+    auto const add_shift_inst_test = [&ret](std::string_view name,
+                                            std::string_view condition,
+                                            std::array<emu::byte_t, 5> const& opcodes,
+                                            emu::byte_t operand,
+                                            emu::byte_t result,
+                                            emu::SR initial_sr = {},
+                                            emu::SR expected_sr = {}) {
+        auto const op_acc = opcodes[0];
+        auto const op_zpg = opcodes[1];
+        auto const op_zpg_X = opcodes[2];
+        auto const op_abs = opcodes[3];
+        auto const op_abs_X = opcodes[4];
+        ret.insert(ret.end(),
+                   {
+                       {
+                           .name = fmt::format("Test {} - accumulator - {}", name, condition),
+                           .instructions = {op_acc},
+                           .expected_cycles = 2,
+                           .initial_cpu_state = {.A = operand, .SR = initial_sr},
+                           .expected_cpu_state = {.A = result, .SR = expected_sr},
+                       },
+                       {
+                           .name = fmt::format("Test {} - zpg - {}", name, condition),
+                           .instructions = {op_zpg, 0x55_b},
+                           .data = {{.offset = 0x55_w, .data = {operand}}},
+                           .expected_data = {{.offset = 0x55_w, .data = {result}}},
+                           .expected_cycles = 5,
+                           .initial_cpu_state = {.SR = initial_sr},
+                           .expected_cpu_state = {.SR = expected_sr},
+                       },
+                       {
+                           .name = fmt::format("Test {} - zpg,X - {}", name, condition),
+                           .instructions = {op_zpg_X, 0x55_b},
+                           .data = {{.offset = 0x66_w, .data = {operand}}},
+                           .expected_data = {{.offset = 0x66_w, .data = {result}}},
+                           .expected_cycles = 6,
+                           .initial_cpu_state = {.X = 0x11_b, .SR = initial_sr},
+                           .expected_cpu_state = {.X = 0x11_b, .SR = expected_sr},
+                       },
+                       {
+                           .name = fmt::format("Test {} - absolute - {}", name, condition),
+                           .instructions = {op_abs, 0x55_b, 0xaa_b},
+                           .data = {{.offset = 0xaa55_w, .data = {operand}}},
+                           .expected_data = {{.offset = 0xaa55_w, .data = {result}}},
+                           .expected_cycles = 6,
+                           .initial_cpu_state = {.SR = initial_sr},
+                           .expected_cpu_state = {.SR = expected_sr},
+                       },
+                       {
+                           .name = fmt::format("Test {} - absolute,X - {}", name, condition),
+                           .instructions = {op_abs_X, 0x55_b, 0xaa_b},
+                           .data = {{.offset = 0xaa66_w, .data = {operand}}},
+                           .expected_data = {{.offset = 0xaa66_w, .data = {result}}},
+                           .expected_cycles = 7,
+                           .initial_cpu_state = {.X = 0x11_b, .SR = initial_sr},
+                           .expected_cpu_state = {.X = 0x11_b, .SR = expected_sr},
+                       },
+                   });
+    };
+
     std::array const and_opcodes{0x29_b, 0x25_b, 0x35_b, 0x2d_b, 0x3d_b, 0x39_b, 0x21_b, 0x31_b};
     std::array const ora_opcodes{0x09_b, 0x05_b, 0x15_b, 0x0d_b, 0x1d_b, 0x19_b, 0x01_b, 0x11_b};
     std::array const eor_opcodes{0x49_b, 0x45_b, 0x55_b, 0x4d_b, 0x5d_b, 0x59_b, 0x41_b, 0x51_b};
     std::array const lda_opcodes{0xa9_b, 0xa5_b, 0xb5_b, 0xad_b, 0xbd_b, 0xb9_b, 0xa1_b, 0xb1_b};
     std::array const adc_opcodes{0x69_b, 0x65_b, 0x75_b, 0x6d_b, 0x7d_b, 0x79_b, 0x61_b, 0x71_b};
     std::array const sbc_opcodes{0xe9_b, 0xe5_b, 0xf5_b, 0xed_b, 0xfd_b, 0xf9_b, 0xe1_b, 0xf1_b};
+    std::array const asl_opcodes{0x0a_b, 0x06_b, 0x16_b, 0x0e_b, 0x1e_b};
+    std::array const lsr_opcodes{0x4a_b, 0x46_b, 0x56_b, 0x4e_b, 0x5e_b};
+    std::array const rol_opcodes{0x2a_b, 0x26_b, 0x36_b, 0x2e_b, 0x3e_b};
+    std::array const ror_opcodes{0x6a_b, 0x66_b, 0x76_b, 0x6e_b, 0x7e_b};
 
     // clang-format off
     #define Z .Z=true
@@ -549,6 +613,50 @@ static std::vector<ParamType> get_test_cases()
     add_cond_branch_inst_tests("BMI", 0x30_b, {N}, {});
     add_cond_branch_inst_tests("BVC", 0x50_b, {},  {V});
     add_cond_branch_inst_tests("BVS", 0x70_b, {V}, {});
+
+    add_shift_inst_test("ASL", "no flags", asl_opcodes, 0x35_b, 0x6a_b);
+    add_shift_inst_test("ASL", "N flag", asl_opcodes, 0x55_b, 0xaa_b, {}, {N});
+    add_shift_inst_test("ASL", "C flag", asl_opcodes, 0xaa_b, 0x54_b, {}, {C});
+    add_shift_inst_test("ASL", "N,C flags", asl_opcodes, 0xca_b, 0x94_b, {}, {N, C});
+    add_shift_inst_test("ASL", "Z flag", asl_opcodes, 0x00_b, 0x00_b, {}, {Z});
+    add_shift_inst_test("ASL", "Z,C flags", asl_opcodes, 0x80_b, 0x00_b, {}, {Z,C});
+
+    add_shift_inst_test("ASL", "no flags, ignore carry", asl_opcodes, 0x35_b, 0x6a_b, {C}, {});
+    add_shift_inst_test("ASL", "N flag, ignore carry", asl_opcodes, 0x55_b, 0xaa_b, {C}, {N});
+    add_shift_inst_test("ASL", "C flag, ignore carry", asl_opcodes, 0xaa_b, 0x54_b, {C}, {C});
+    add_shift_inst_test("ASL", "N,C flags, ignore carry", asl_opcodes, 0xca_b, 0x94_b, {C}, {N, C});
+    add_shift_inst_test("ASL", "Z flag, ignore carry", asl_opcodes, 0x00_b, 0x00_b, {C}, {Z});
+    add_shift_inst_test("ASL", "Z,C flags, ignore carry", asl_opcodes, 0x80_b, 0x00_b, {C}, {Z,C});
+
+    add_shift_inst_test("LSR", "no flags", lsr_opcodes, 0x6a_b, 0x35_b);
+    add_shift_inst_test("LSR", "C flag", lsr_opcodes, 0x55_b, 0x2a_b, {}, {C});
+    add_shift_inst_test("LSR", "Z flag", lsr_opcodes, 0x00_b, 0x00_b, {}, {Z});
+    add_shift_inst_test("LSR", "Z,C flags", lsr_opcodes, 0x01_b, 0x00_b, {}, {Z,C});
+
+    add_shift_inst_test("LSR", "no flags, igore carry", lsr_opcodes, 0x6a_b, 0x35_b, {C}, {});
+    add_shift_inst_test("LSR", "C flag, igore carry", lsr_opcodes, 0x55_b, 0x2a_b, {C}, {C});
+    add_shift_inst_test("LSR", "Z flag, igore carry", lsr_opcodes, 0x00_b, 0x00_b, {C}, {Z});
+    add_shift_inst_test("LSR", "Z,C flags, igore carry", lsr_opcodes, 0x01_b, 0x00_b, {C}, {Z,C});
+
+    add_shift_inst_test("ROL", "no flags", rol_opcodes, 0x35_b, 0x6a_b);
+    add_shift_inst_test("ROL", "N flag", rol_opcodes, 0x55_b, 0xaa_b, {}, {N});
+    add_shift_inst_test("ROL", "C flag", rol_opcodes, 0xaa_b, 0x54_b, {}, {C});
+    add_shift_inst_test("ROL", "N,C flags", rol_opcodes, 0xca_b, 0x94_b, {}, {N, C});
+    add_shift_inst_test("ROL", "Z flag", rol_opcodes, 0x00_b, 0x00_b, {}, {Z});
+    add_shift_inst_test("ROL", "Z,C flags", rol_opcodes, 0x80_b, 0x00_b, {}, {Z,C});
+
+    add_shift_inst_test("ROL", "no flags, carry in", rol_opcodes, 0x35_b, 0x6b_b, {C}, {});
+    add_shift_inst_test("ROL", "N flag, carry in", rol_opcodes, 0x55_b, 0xab_b, {C}, {N});
+    add_shift_inst_test("ROL", "C flag, carry in", rol_opcodes, 0xaa_b, 0x55_b, {C}, {C});
+    add_shift_inst_test("ROL", "N,C flags, carry in", rol_opcodes, 0xca_b, 0x95_b, {C}, {N, C});
+
+    add_shift_inst_test("ROR", "no flags", ror_opcodes, 0x6a_b, 0x35_b);
+    add_shift_inst_test("ROR", "C flag", ror_opcodes, 0x55_b, 0x2a_b, {}, {C});
+    add_shift_inst_test("ROR", "Z flag", ror_opcodes, 0x00_b, 0x00_b, {}, {Z});
+    add_shift_inst_test("ROR", "Z,C flags", ror_opcodes, 0x01_b, 0x00_b, {}, {Z,C});
+
+    add_shift_inst_test("ROR", "N flag, carry in", ror_opcodes, 0xaa_b, 0xd5_b, {C}, {N});
+    add_shift_inst_test("ROR", "N,C flag, carry in", ror_opcodes, 0x55_b, 0xaa_b, {C}, {N, C});
 
     #undef Z
     #undef N

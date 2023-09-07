@@ -170,7 +170,6 @@ addr_mode_result_t
 
 bool is_negative(byte_t value) { return static_cast<int8_t>(value) < 0; }
 bool msb(byte_t value) { return is_negative(value); }
-bool lsb(byte_t value) { return static_cast<bool>(value & 1_b); }
 
 void assign_accumulator(CPU& cpu, byte_t value)
 {
@@ -369,57 +368,41 @@ uint64_t transfer_op(Instruction const&, CPU& cpu, byte_t src, byte_t* dst, bool
     return 2;
 }
 
-using shift_left = decltype([](byte_t b, bool carry) { return (b << 1) | byte_t{carry}; });
-using shift_right = decltype([](byte_t b, bool carry) { return (b >> 1) | (byte_t{carry} << 7); });
+auto shift_left(byte_t b, bool shift_in)
+{
+    auto const carry = (b & 0x80_b) != 0_b;
+    return std::make_pair((b << 1) | byte_t{shift_in}, carry);
+};
 
-template<typename ShiftOp>
+auto shift_right(byte_t b, bool shift_in)
+{
+    auto const carry = (b & 1_b) != 0_b;
+    return std::make_pair((b >> 1) | (byte_t{shift_in} << 7), carry);
+};
+
+using shift_fn_t = std::pair<byte_t, bool> (*)(byte_t b, bool shift_in);
+
 uint64_t shift_mem_op(Instruction const& inst,
                       CPU& cpu,
                       Bus& bus,
-                      addr_fn_t addr_mode,
-                      bool (*get_carry_bit)(byte_t))
+                      shift_fn_t shift_fn,
+                      bool roll,
+                      bool add_extra_cycle,
+                      addr_fn_t addr_mode)
 {
     auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
-    auto const result = ShiftOp{}(op, 0);
-    cpu.SR.C = get_carry_bit(op);
+    auto const [result, carry] = shift_fn(op, roll ? cpu.SR.C : false);
+    cpu.SR.C = carry;
     assign_memory(cpu, bus, addr, result);
 
     cpu.PC += size + 1_w;
-    return 1 + cycles;
+    return cycles + (add_extra_cycle ? 4 : 3);
 }
 
-template<typename ShiftOp>
-uint64_t shift_A_op(Instruction const&, CPU& cpu, bool (*get_carry_bit)(byte_t))
+uint64_t shift_A_op(Instruction const&, CPU& cpu, shift_fn_t shift_fn, bool roll)
 {
-    auto const result = ShiftOp{}(cpu.A, 0);
-    cpu.SR.C = get_carry_bit(cpu.A);
-    assign_accumulator(cpu, result);
-
-    cpu.PC += 1_w;
-    return 2;
-}
-
-template<typename ShiftOp>
-uint64_t roll_mem_op(Instruction const& inst,
-                     CPU& cpu,
-                     Bus& bus,
-                     addr_fn_t addr_mode,
-                     bool (*get_carry_bit)(byte_t))
-{
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
-    auto const result = ShiftOp{}(op, cpu.SR.C);
-    cpu.SR.C = get_carry_bit(op);
-    assign_memory(cpu, bus, addr, result);
-
-    cpu.PC += size + 1_w;
-    return 1 + cycles;
-}
-
-template<typename ShiftOp>
-uint64_t roll_A_op(Instruction const&, CPU& cpu, bool (*get_carry_bit)(byte_t))
-{
-    auto const result = ShiftOp{}(cpu.A, cpu.SR.C);
-    cpu.SR.C = get_carry_bit(cpu.A);
+    auto const [result, carry] = shift_fn(cpu.A, roll ? cpu.SR.C : false);
+    cpu.SR.C = carry;
     assign_accumulator(cpu, result);
 
     cpu.PC += 1_w;
@@ -562,29 +545,29 @@ uint64_t CPX_imm(Instruction const& inst, CPU& cpu, Bus& bus) { return cmp_op(in
 uint64_t CPX_zpg(Instruction const& inst, CPU& cpu, Bus& bus) { return cmp_op(inst, cpu, bus, cpu.X, addr_zpg); }
 uint64_t CPX_abs(Instruction const& inst, CPU& cpu, Bus& bus) { return cmp_op(inst, cpu, bus, cpu.X, addr_abs); }
 
-uint64_t ASL_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op<shift_left>(inst, cpu, msb); }
-uint64_t ASL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op<shift_left>(inst, cpu, bus, addr_zpg,   msb); }
-uint64_t ASL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op<shift_left>(inst, cpu, bus, addr_abs,   msb); }
-uint64_t ASL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op<shift_left>(inst, cpu, bus, addr_zpg_X, msb); }
-uint64_t ASL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op<shift_left>(inst, cpu, bus, addr_abs_X, msb); }
+uint64_t ASL_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_left, false); }
+uint64_t ASL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_zpg); }
+uint64_t ASL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_abs); }
+uint64_t ASL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_zpg_X); }
+uint64_t ASL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, true, addr_abs_X); }
 
-uint64_t LSR_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op<shift_right>(inst, cpu, lsb); }
-uint64_t LSR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op<shift_right>(inst, cpu, bus, addr_zpg,   lsb); }
-uint64_t LSR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op<shift_right>(inst, cpu, bus, addr_abs,   lsb); }
-uint64_t LSR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op<shift_right>(inst, cpu, bus, addr_zpg_X, lsb); }
-uint64_t LSR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op<shift_right>(inst, cpu, bus, addr_abs_X, lsb); }
+uint64_t LSR_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_right, false); }
+uint64_t LSR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_zpg); }
+uint64_t LSR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_abs); }
+uint64_t LSR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_zpg_X); }
+uint64_t LSR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, true, addr_abs_X); }
 
-uint64_t ROL_A(Instruction const& inst, CPU& cpu, Bus&)         { return roll_A_op<shift_left>(inst, cpu, msb); }
-uint64_t ROL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return roll_mem_op<shift_left>(inst, cpu, bus, addr_zpg,   msb); }
-uint64_t ROL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return roll_mem_op<shift_left>(inst, cpu, bus, addr_abs,   msb); }
-uint64_t ROL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return roll_mem_op<shift_left>(inst, cpu, bus, addr_zpg_X, msb); }
-uint64_t ROL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return roll_mem_op<shift_left>(inst, cpu, bus, addr_abs_X, msb); }
+uint64_t ROL_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_left, true); }
+uint64_t ROL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_zpg); }
+uint64_t ROL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_abs); }
+uint64_t ROL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_zpg_X); }
+uint64_t ROL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, true, addr_abs_X); }
 
-uint64_t ROR_A(Instruction const& inst, CPU& cpu, Bus&)         { return roll_A_op<shift_right>(inst, cpu, lsb); }
-uint64_t ROR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return roll_mem_op<shift_right>(inst, cpu, bus, addr_zpg,   lsb); }
-uint64_t ROR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return roll_mem_op<shift_right>(inst, cpu, bus, addr_abs,   lsb); }
-uint64_t ROR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return roll_mem_op<shift_right>(inst, cpu, bus, addr_zpg_X, lsb); }
-uint64_t ROR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return roll_mem_op<shift_right>(inst, cpu, bus, addr_abs_X, lsb); }
+uint64_t ROR_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_right, true); }
+uint64_t ROR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_zpg); }
+uint64_t ROR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_abs); }
+uint64_t ROR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_zpg_X); }
+uint64_t ROR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, true, addr_abs_X); }
 
 uint64_t BIT_zpg(Instruction const& inst, CPU& cpu, Bus& bus) { return BIT_op(inst, cpu, bus, addr_zpg); }
 uint64_t BIT_abs(Instruction const& inst, CPU& cpu, Bus& bus) { return BIT_op(inst, cpu, bus, addr_abs); }
