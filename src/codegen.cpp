@@ -486,7 +486,7 @@ template<typename ShiftOp>
 llvm::Value* shift_mem_op(Context const& c, addr_fn_t addr_mode)
 {
     auto const [addr, op, cycles] = addr_mode(c, true);
-    auto const [result, carry_flag] = ShiftOp{}(c, op, int_const<bool>(c, false));
+    auto const [result, carry_flag] = ShiftOp{}(c, op, int_const(c, false));
     store_flag(c, FlagOffset::C, carry_flag);
     write_bus(c, addr, result);
     set_n_z(c, result);
@@ -498,7 +498,7 @@ template<typename ShiftOp>
 llvm::Value* shift_A_op(Context const& c)
 {
     auto* const a_reg = load_reg(c, RegOffset::A);
-    auto const [result, carry_flag] = ShiftOp{}(c, a_reg, int_const<bool>(c, false));
+    auto const [result, carry_flag] = ShiftOp{}(c, a_reg, int_const(c, false));
     store_flag(c, FlagOffset::C, carry_flag);
     store_reg(c, RegOffset::A, result);
     set_n_z(c, result);
@@ -645,167 +645,181 @@ llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
     return nullptr;
 }
 
+llvm::Value* BIT_op(Context const& c, addr_fn_t addr_mode)
+{
+    auto const [addr, op, cycles] = addr_mode(c, true);
+
+    auto* const n_bit = c.builder->CreateAnd(op, int_const(c, 0x80_b));
+    auto* const new_n =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_NE, n_bit, int_const(c, 0_b));
+
+    auto* const v_bit = c.builder->CreateAnd(op, int_const(c, 0x40_b));
+    auto* const new_v =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_NE, v_bit, int_const(c, 0_b));
+
+    auto* const a_reg = load_reg(c, RegOffset::A);
+    auto* const a_masked = c.builder->CreateAnd(a_reg, op);
+    auto* const new_z =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, a_masked, int_const(c, 0_b));
+
+    store_flag(c, FlagOffset::N, new_n);
+    store_flag(c, FlagOffset::V, new_v);
+    store_flag(c, FlagOffset::Z, new_z);
+
+    add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
+    return nullptr;
+}
+
 // Actual instruction codegen functions
 
 llvm::Value* unimplemented(Context const& c)
 {
     spdlog::info("Unknown instruction: {}", c.inst->disassemble());
     return nullptr;
-};
+}
 
 // clang-format off
-llvm::Value* ORA_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_X_ind); };
-llvm::Value* ORA_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_zpg); };
-llvm::Value* ORA_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_imm); };
-llvm::Value* ORA_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs); };
-llvm::Value* ORA_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_ind_Y); };
-llvm::Value* ORA_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_zpg_X); };
-llvm::Value* ORA_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs_Y); };
-llvm::Value* ORA_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs_X); };
+llvm::Value* ORA_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_X_ind); }
+llvm::Value* ORA_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_zpg); }
+llvm::Value* ORA_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_imm); }
+llvm::Value* ORA_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs); }
+llvm::Value* ORA_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_ind_Y); }
+llvm::Value* ORA_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_zpg_X); }
+llvm::Value* ORA_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs_Y); }
+llvm::Value* ORA_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateOr, addr_abs_X); }
 
-llvm::Value* AND_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_X_ind); };
-llvm::Value* AND_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_zpg); };
-llvm::Value* AND_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_imm); };
-llvm::Value* AND_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs); };
-llvm::Value* AND_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_ind_Y); };
-llvm::Value* AND_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_zpg_X); };
-llvm::Value* AND_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs_Y); };
-llvm::Value* AND_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs_X); };
+llvm::Value* AND_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_X_ind); }
+llvm::Value* AND_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_zpg); }
+llvm::Value* AND_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_imm); }
+llvm::Value* AND_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs); }
+llvm::Value* AND_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_ind_Y); }
+llvm::Value* AND_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_zpg_X); }
+llvm::Value* AND_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs_Y); }
+llvm::Value* AND_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateAnd, addr_abs_X); }
 
-llvm::Value* EOR_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_X_ind); };
-llvm::Value* EOR_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_zpg); };
-llvm::Value* EOR_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_imm); };
-llvm::Value* EOR_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs); };
-llvm::Value* EOR_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_ind_Y); };
-llvm::Value* EOR_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_zpg_X); };
-llvm::Value* EOR_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_Y); };
-llvm::Value* EOR_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_X); };
+llvm::Value* EOR_X_ind(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_X_ind); }
+llvm::Value* EOR_zpg(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_zpg); }
+llvm::Value* EOR_imm(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_imm); }
+llvm::Value* EOR_abs(Context const& c)   { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs); }
+llvm::Value* EOR_ind_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_ind_Y); }
+llvm::Value* EOR_zpg_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_zpg_X); }
+llvm::Value* EOR_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_Y); }
+llvm::Value* EOR_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_X); }
 
-llvm::Value* ASL_A(Context const& c)     { return shift_A_op<shift_left_t>(c); };
-llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_zpg); };
-llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_abs); };
-llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_zpg_X); };
-llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_abs_X); };
+llvm::Value* ASL_A(Context const& c)     { return shift_A_op<shift_left_t>(c); }
+llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_zpg); }
+llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op<shift_left_t>(c, addr_abs); }
+llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_zpg_X); }
+llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op<shift_left_t>(c, addr_abs_X); }
 
-llvm::Value* LSR_A(Context const& c)     { return shift_A_op<shift_right_t>(c); };
-llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_zpg); };
-llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_abs); };
-llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_zpg_X); };
-llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_abs_X); };
+llvm::Value* LSR_A(Context const& c)     { return shift_A_op<shift_right_t>(c); }
+llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_zpg); }
+llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op<shift_right_t>(c, addr_abs); }
+llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_zpg_X); }
+llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op<shift_right_t>(c, addr_abs_X); }
 
-llvm::Value* ROL_A(Context const& c)     { return roll_A_op<shift_left_t>(c); };
-llvm::Value* ROL_zpg(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_zpg); };
-llvm::Value* ROL_abs(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_abs); };
-llvm::Value* ROL_zpg_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_zpg_X); };
-llvm::Value* ROL_abs_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_abs_X); };
+llvm::Value* ROL_A(Context const& c)     { return roll_A_op<shift_left_t>(c); }
+llvm::Value* ROL_zpg(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_zpg); }
+llvm::Value* ROL_abs(Context const& c)   { return roll_mem_op<shift_left_t>(c, addr_abs); }
+llvm::Value* ROL_zpg_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_zpg_X); }
+llvm::Value* ROL_abs_X(Context const& c) { return roll_mem_op<shift_left_t>(c, addr_abs_X); }
 
-llvm::Value* ROR_A(Context const& c)     { return roll_A_op<shift_right_t>(c); };
-llvm::Value* ROR_zpg(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_zpg); };
-llvm::Value* ROR_abs(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_abs); };
-llvm::Value* ROR_zpg_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_zpg_X); };
-llvm::Value* ROR_abs_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_abs_X); };
+llvm::Value* ROR_A(Context const& c)     { return roll_A_op<shift_right_t>(c); }
+llvm::Value* ROR_zpg(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_zpg); }
+llvm::Value* ROR_abs(Context const& c)   { return roll_mem_op<shift_right_t>(c, addr_abs); }
+llvm::Value* ROR_zpg_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_zpg_X); }
+llvm::Value* ROR_abs_X(Context const& c) { return roll_mem_op<shift_right_t>(c, addr_abs_X); }
 
-llvm::Value* ADC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, true); };
-llvm::Value* ADC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   true); };
-llvm::Value* ADC_imm(Context const& c)   { return add_sub_op(c, addr_imm,   true); };
-llvm::Value* ADC_abs(Context const& c)   { return add_sub_op(c, addr_abs,   true); };
-llvm::Value* ADC_ind_Y(Context const& c) { return add_sub_op(c, addr_ind_Y, true); };
-llvm::Value* ADC_zpg_X(Context const& c) { return add_sub_op(c, addr_zpg_X, true); };
-llvm::Value* ADC_abs_Y(Context const& c) { return add_sub_op(c, addr_abs_Y, true); };
-llvm::Value* ADC_abs_X(Context const& c) { return add_sub_op(c, addr_abs_X, true); };
+llvm::Value* ADC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, true); }
+llvm::Value* ADC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   true); }
+llvm::Value* ADC_imm(Context const& c)   { return add_sub_op(c, addr_imm,   true); }
+llvm::Value* ADC_abs(Context const& c)   { return add_sub_op(c, addr_abs,   true); }
+llvm::Value* ADC_ind_Y(Context const& c) { return add_sub_op(c, addr_ind_Y, true); }
+llvm::Value* ADC_zpg_X(Context const& c) { return add_sub_op(c, addr_zpg_X, true); }
+llvm::Value* ADC_abs_Y(Context const& c) { return add_sub_op(c, addr_abs_Y, true); }
+llvm::Value* ADC_abs_X(Context const& c) { return add_sub_op(c, addr_abs_X, true); }
 
-llvm::Value* SBC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, false); };
-llvm::Value* SBC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   false); };
-llvm::Value* SBC_imm(Context const& c)   { return add_sub_op(c, addr_imm,   false); };
-llvm::Value* SBC_abs(Context const& c)   { return add_sub_op(c, addr_abs,   false); };
-llvm::Value* SBC_ind_Y(Context const& c) { return add_sub_op(c, addr_ind_Y, false); };
-llvm::Value* SBC_zpg_X(Context const& c) { return add_sub_op(c, addr_zpg_X, false); };
-llvm::Value* SBC_abs_Y(Context const& c) { return add_sub_op(c, addr_abs_Y, false); };
-llvm::Value* SBC_abs_X(Context const& c) { return add_sub_op(c, addr_abs_X, false); };
+llvm::Value* SBC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, false); }
+llvm::Value* SBC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   false); }
+llvm::Value* SBC_imm(Context const& c)   { return add_sub_op(c, addr_imm,   false); }
+llvm::Value* SBC_abs(Context const& c)   { return add_sub_op(c, addr_abs,   false); }
+llvm::Value* SBC_ind_Y(Context const& c) { return add_sub_op(c, addr_ind_Y, false); }
+llvm::Value* SBC_zpg_X(Context const& c) { return add_sub_op(c, addr_zpg_X, false); }
+llvm::Value* SBC_abs_Y(Context const& c) { return add_sub_op(c, addr_abs_Y, false); }
+llvm::Value* SBC_abs_X(Context const& c) { return add_sub_op(c, addr_abs_X, false); }
 
-llvm::Value* CMP_X_ind(Context const& c) { return cmp_op(c, RegOffset::A, addr_X_ind); };
-llvm::Value* CMP_zpg(Context const& c)   { return cmp_op(c, RegOffset::A, addr_zpg); };
-llvm::Value* CMP_imm(Context const& c)   { return cmp_op(c, RegOffset::A, addr_imm); };
-llvm::Value* CMP_abs(Context const& c)   { return cmp_op(c, RegOffset::A, addr_abs); };
-llvm::Value* CMP_ind_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_ind_Y); };
-llvm::Value* CMP_zpg_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_zpg_X); };
-llvm::Value* CMP_abs_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_Y); };
-llvm::Value* CMP_abs_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_X); };
+llvm::Value* CMP_X_ind(Context const& c) { return cmp_op(c, RegOffset::A, addr_X_ind); }
+llvm::Value* CMP_zpg(Context const& c)   { return cmp_op(c, RegOffset::A, addr_zpg); }
+llvm::Value* CMP_imm(Context const& c)   { return cmp_op(c, RegOffset::A, addr_imm); }
+llvm::Value* CMP_abs(Context const& c)   { return cmp_op(c, RegOffset::A, addr_abs); }
+llvm::Value* CMP_ind_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_ind_Y); }
+llvm::Value* CMP_zpg_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_zpg_X); }
+llvm::Value* CMP_abs_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_Y); }
+llvm::Value* CMP_abs_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_X); }
 
-llvm::Value* CPX_imm(Context const& c) { return cmp_op(c, RegOffset::X, addr_imm); };
-llvm::Value* CPX_zpg(Context const& c) { return cmp_op(c, RegOffset::X, addr_zpg); };
-llvm::Value* CPX_abs(Context const& c) { return cmp_op(c, RegOffset::X, addr_abs); };
+llvm::Value* CPX_imm(Context const& c) { return cmp_op(c, RegOffset::X, addr_imm); }
+llvm::Value* CPX_zpg(Context const& c) { return cmp_op(c, RegOffset::X, addr_zpg); }
+llvm::Value* CPX_abs(Context const& c) { return cmp_op(c, RegOffset::X, addr_abs); }
 
-llvm::Value* CPY_imm(Context const& c) { return cmp_op(c, RegOffset::Y, addr_imm); };
-llvm::Value* CPY_zpg(Context const& c) { return cmp_op(c, RegOffset::Y, addr_zpg); };
-llvm::Value* CPY_abs(Context const& c) { return cmp_op(c, RegOffset::Y, addr_abs); };
+llvm::Value* CPY_imm(Context const& c) { return cmp_op(c, RegOffset::Y, addr_imm); }
+llvm::Value* CPY_zpg(Context const& c) { return cmp_op(c, RegOffset::Y, addr_zpg); }
+llvm::Value* CPY_abs(Context const& c) { return cmp_op(c, RegOffset::Y, addr_abs); }
 
-llvm::Value* STA_X_ind(Context const& c) { return store_op(c, RegOffset::A, addr_X_ind); };
-llvm::Value* STA_zpg(Context const& c)   { return store_op(c, RegOffset::A, addr_zpg); };
-llvm::Value* STA_abs(Context const& c)   { return store_op(c, RegOffset::A, addr_abs); };
-llvm::Value* STA_ind_Y(Context const& c) { return store_op(c, RegOffset::A, addr_ind_Y); };
-llvm::Value* STA_zpg_X(Context const& c) { return store_op(c, RegOffset::A, addr_zpg_X); };
-llvm::Value* STA_abs_Y(Context const& c) { return store_op(c, RegOffset::A, addr_abs_Y); };
-llvm::Value* STA_abs_X(Context const& c) { return store_op(c, RegOffset::A, addr_abs_X); };
+llvm::Value* STA_X_ind(Context const& c) { return store_op(c, RegOffset::A, addr_X_ind); }
+llvm::Value* STA_zpg(Context const& c)   { return store_op(c, RegOffset::A, addr_zpg); }
+llvm::Value* STA_abs(Context const& c)   { return store_op(c, RegOffset::A, addr_abs); }
+llvm::Value* STA_ind_Y(Context const& c) { return store_op(c, RegOffset::A, addr_ind_Y); }
+llvm::Value* STA_zpg_X(Context const& c) { return store_op(c, RegOffset::A, addr_zpg_X); }
+llvm::Value* STA_abs_Y(Context const& c) { return store_op(c, RegOffset::A, addr_abs_Y); }
+llvm::Value* STA_abs_X(Context const& c) { return store_op(c, RegOffset::A, addr_abs_X); }
 
-llvm::Value* STX_zpg(Context const& c)   { return store_op(c, RegOffset::X, addr_zpg); };
-llvm::Value* STX_abs(Context const& c)   { return store_op(c, RegOffset::X, addr_abs); };
-llvm::Value* STX_zpg_Y(Context const& c) { return store_op(c, RegOffset::X, addr_zpg_Y); };
+llvm::Value* STX_zpg(Context const& c)   { return store_op(c, RegOffset::X, addr_zpg); }
+llvm::Value* STX_abs(Context const& c)   { return store_op(c, RegOffset::X, addr_abs); }
+llvm::Value* STX_zpg_Y(Context const& c) { return store_op(c, RegOffset::X, addr_zpg_Y); }
 
-llvm::Value* STY_zpg(Context const& c)   { return store_op(c, RegOffset::Y, addr_zpg); };
-llvm::Value* STY_abs(Context const& c)   { return store_op(c, RegOffset::Y, addr_abs); };
-llvm::Value* STY_zpg_X(Context const& c) { return store_op(c, RegOffset::Y, addr_zpg_X); };
+llvm::Value* STY_zpg(Context const& c)   { return store_op(c, RegOffset::Y, addr_zpg); }
+llvm::Value* STY_abs(Context const& c)   { return store_op(c, RegOffset::Y, addr_abs); }
+llvm::Value* STY_zpg_X(Context const& c) { return store_op(c, RegOffset::Y, addr_zpg_X); }
 
-llvm::Value* LDA_X_ind(Context const& c) { return load_op(c, RegOffset::A, addr_X_ind); };
-llvm::Value* LDA_zpg(Context const& c)   { return load_op(c, RegOffset::A, addr_zpg); };
-llvm::Value* LDA_imm(Context const& c)   { return load_op(c, RegOffset::A, addr_imm); };
-llvm::Value* LDA_abs(Context const& c)   { return load_op(c, RegOffset::A, addr_abs); };
-llvm::Value* LDA_ind_Y(Context const& c) { return load_op(c, RegOffset::A, addr_ind_Y); };
-llvm::Value* LDA_zpg_X(Context const& c) { return load_op(c, RegOffset::A, addr_zpg_X); };
-llvm::Value* LDA_abs_Y(Context const& c) { return load_op(c, RegOffset::A, addr_abs_Y); };
-llvm::Value* LDA_abs_X(Context const& c) { return load_op(c, RegOffset::A, addr_abs_X); };
+llvm::Value* LDA_X_ind(Context const& c) { return load_op(c, RegOffset::A, addr_X_ind); }
+llvm::Value* LDA_zpg(Context const& c)   { return load_op(c, RegOffset::A, addr_zpg); }
+llvm::Value* LDA_imm(Context const& c)   { return load_op(c, RegOffset::A, addr_imm); }
+llvm::Value* LDA_abs(Context const& c)   { return load_op(c, RegOffset::A, addr_abs); }
+llvm::Value* LDA_ind_Y(Context const& c) { return load_op(c, RegOffset::A, addr_ind_Y); }
+llvm::Value* LDA_zpg_X(Context const& c) { return load_op(c, RegOffset::A, addr_zpg_X); }
+llvm::Value* LDA_abs_Y(Context const& c) { return load_op(c, RegOffset::A, addr_abs_Y); }
+llvm::Value* LDA_abs_X(Context const& c) { return load_op(c, RegOffset::A, addr_abs_X); }
 
-llvm::Value* LDX_imm(Context const& c)   { return load_op(c, RegOffset::X, addr_imm); };
-llvm::Value* LDX_zpg(Context const& c)   { return load_op(c, RegOffset::X, addr_zpg); };
-llvm::Value* LDX_abs(Context const& c)   { return load_op(c, RegOffset::X, addr_abs); };
-llvm::Value* LDX_zpg_Y(Context const& c) { return load_op(c, RegOffset::X, addr_zpg_Y); };
-llvm::Value* LDX_abs_Y(Context const& c) { return load_op(c, RegOffset::X, addr_abs_Y); };
+llvm::Value* LDX_imm(Context const& c)   { return load_op(c, RegOffset::X, addr_imm); }
+llvm::Value* LDX_zpg(Context const& c)   { return load_op(c, RegOffset::X, addr_zpg); }
+llvm::Value* LDX_abs(Context const& c)   { return load_op(c, RegOffset::X, addr_abs); }
+llvm::Value* LDX_zpg_Y(Context const& c) { return load_op(c, RegOffset::X, addr_zpg_Y); }
+llvm::Value* LDX_abs_Y(Context const& c) { return load_op(c, RegOffset::X, addr_abs_Y); }
 
-llvm::Value* LDY_imm(Context const& c)   { return load_op(c, RegOffset::Y, addr_imm); };
-llvm::Value* LDY_zpg(Context const& c)   { return load_op(c, RegOffset::Y, addr_zpg); };
-llvm::Value* LDY_abs(Context const& c)   { return load_op(c, RegOffset::Y, addr_abs); };
-llvm::Value* LDY_zpg_X(Context const& c) { return load_op(c, RegOffset::Y, addr_zpg_X); };
-llvm::Value* LDY_abs_X(Context const& c) { return load_op(c, RegOffset::Y, addr_abs_X); };
+llvm::Value* LDY_imm(Context const& c)   { return load_op(c, RegOffset::Y, addr_imm); }
+llvm::Value* LDY_zpg(Context const& c)   { return load_op(c, RegOffset::Y, addr_zpg); }
+llvm::Value* LDY_abs(Context const& c)   { return load_op(c, RegOffset::Y, addr_abs); }
+llvm::Value* LDY_zpg_X(Context const& c) { return load_op(c, RegOffset::Y, addr_zpg_X); }
+llvm::Value* LDY_abs_X(Context const& c) { return load_op(c, RegOffset::Y, addr_abs_X); }
 
-llvm::Value* INC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   true); };
-llvm::Value* INC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   true); };
-llvm::Value* INC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, true); };
-llvm::Value* INC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, true); };
+llvm::Value* INC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   true); }
+llvm::Value* INC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   true); }
+llvm::Value* INC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, true); }
+llvm::Value* INC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, true); }
 
-llvm::Value* INX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, true); };
-llvm::Value* INY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, true); };
+llvm::Value* INX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, true); }
+llvm::Value* INY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, true); }
 
-llvm::Value* DEC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   false); };
-llvm::Value* DEC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   false); };
-llvm::Value* DEC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, false); };
-llvm::Value* DEC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, false); };
+llvm::Value* DEC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   false); }
+llvm::Value* DEC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   false); }
+llvm::Value* DEC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, false); }
+llvm::Value* DEC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, false); }
 
-llvm::Value* DEX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, false); };
-llvm::Value* DEY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, false); };
+llvm::Value* DEX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, false); }
+llvm::Value* DEY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, false); }
 
-llvm::Value* BIT_zpg(Context const& c)
-{
-    (void)c;
-    spdlog::info("Unimplemented BIT_zpg!");
-    return nullptr;
-};
-
-llvm::Value* BIT_abs(Context const& c)
-{
-    (void)c;
-    spdlog::info("Unimplemented BIT_abs!");
-    return nullptr;
-};
+llvm::Value* BIT_zpg(Context const& c) { return BIT_op(c, addr_zpg); }
+llvm::Value* BIT_abs(Context const& c) { return BIT_op(c, addr_abs); }
 
 llvm::Value* BVC_rel(Context const& c) { return branch_op(c, FlagOffset::V, false); }
 llvm::Value* BVS_rel(Context const& c) { return branch_op(c, FlagOffset::V, true);  }
@@ -816,21 +830,21 @@ llvm::Value* BCS_rel(Context const& c) { return branch_op(c, FlagOffset::C, true
 llvm::Value* BNE_rel(Context const& c) { return branch_op(c, FlagOffset::Z, false); }
 llvm::Value* BEQ_rel(Context const& c) { return branch_op(c, FlagOffset::Z, true);  }
 
-llvm::Value* TAX_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::X); };
-llvm::Value* TXA_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::A); };
-llvm::Value* TAY_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::Y); };
-llvm::Value* TYA_impl(Context const& c) { return transfer_op(c, RegOffset::Y, RegOffset::A); };
-llvm::Value* TXS_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::SP); };
-llvm::Value* TSX_impl(Context const& c) { return transfer_op(c, RegOffset::SP, RegOffset::X); };
+llvm::Value* TAX_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::X); }
+llvm::Value* TXA_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::A); }
+llvm::Value* TAY_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::Y); }
+llvm::Value* TYA_impl(Context const& c) { return transfer_op(c, RegOffset::Y, RegOffset::A); }
+llvm::Value* TXS_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::SP); }
+llvm::Value* TSX_impl(Context const& c) { return transfer_op(c, RegOffset::SP, RegOffset::X); }
 
-llvm::Value* SEC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, true); };
-llvm::Value* SEI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, true); };
-llvm::Value* SED_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, true); };
+llvm::Value* SEC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, true); }
+llvm::Value* SEI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, true); }
+llvm::Value* SED_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, true); }
 
-llvm::Value* CLC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, false); };
-llvm::Value* CLI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, false); };
-llvm::Value* CLV_impl(Context const& c) { return set_flag_op(c, FlagOffset::V, false); };
-llvm::Value* CLD_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, false); };
+llvm::Value* CLC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, false); }
+llvm::Value* CLI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, false); }
+llvm::Value* CLV_impl(Context const& c) { return set_flag_op(c, FlagOffset::V, false); }
+llvm::Value* CLD_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, false); }
 
 // clang-format on
 
@@ -840,7 +854,7 @@ llvm::Value* PHA_impl(Context const& c)
     push(c, a_reg);
     add_cycle_counter(c, int_const<uint64_t>(c, 3));
     return nullptr;
-};
+}
 
 llvm::Value* PLA_impl(Context const& c)
 {
@@ -849,7 +863,7 @@ llvm::Value* PLA_impl(Context const& c)
     set_n_z(c, new_a);
     add_cycle_counter(c, int_const<uint64_t>(c, 4));
     return nullptr;
-};
+}
 
 llvm::Value* PHP_impl(Context const& c)
 {
@@ -857,7 +871,7 @@ llvm::Value* PHP_impl(Context const& c)
     push(c, sr_reg);
     add_cycle_counter(c, int_const<uint64_t>(c, 3));
     return nullptr;
-};
+}
 
 llvm::Value* PLP_impl(Context const& c)
 {
@@ -865,7 +879,7 @@ llvm::Value* PLP_impl(Context const& c)
     store_sr(c, new_sr);
     add_cycle_counter(c, int_const<uint64_t>(c, 4));
     return nullptr;
-};
+}
 
 llvm::Value* RTS_impl(Context const& c)
 {
@@ -874,7 +888,7 @@ llvm::Value* RTS_impl(Context const& c)
     auto* const new_pc = assemble(c, new_pc_lo, new_pc_hi);
     add_cycle_counter(c, int_const<uint64_t>(c, 6));
     return new_pc;
-};
+}
 
 llvm::Value* RTI_impl(Context const& c)
 {
@@ -885,40 +899,44 @@ llvm::Value* RTI_impl(Context const& c)
     store_sr(c, new_sr);
     add_cycle_counter(c, int_const<uint64_t>(c, 6));
     return new_pc;
-};
+}
 
 llvm::Value* JMP_abs(Context const& c)
 {
     add_cycle_counter(c, int_const<uint64_t>(c, 3));
     return int_const(c, *c.inst->get_taken_addr());
-};
+}
 
 llvm::Value* JMP_ind(Context const& c)
 {
-    (void)c;
-    spdlog::info("Unimplemented JMP_ind!");
-    return nullptr;
-};
+    auto* const addr = decode_addr_abs(c);
+    auto* const addr_p1 = c.builder->CreateAdd(addr, int_const(c, 1_w));
+    auto* const new_pc_lo = read_bus(c, addr);
+    auto* const new_pc_hi = read_bus(c, addr_p1);
+    auto* const new_pc = assemble(c, new_pc_lo, new_pc_hi);
+    add_cycle_counter(c, int_const<uint64_t>(c, 5));
+    return new_pc;
+}
 
 llvm::Value* JSR_abs(Context const& c)
 {
     (void)c;
     spdlog::info("Unimplemented JSR_abs!");
     return nullptr;
-};
+}
 
 llvm::Value* BRK_impl(Context const& c)
 {
     (void)c;
     spdlog::info("Unimplemented BRK_impl!");
     return nullptr;
-};
+}
 
 llvm::Value* NOP_impl(Context const& c)
 {
     add_cycle_counter(c, int_const<uint64_t>(c, 2));
     return nullptr;
-};
+}
 
 // clang-format off
 #define _ unimplemented
@@ -1073,7 +1091,7 @@ auto* create_bus_write_function_type(llvm::LLVMContext& context, llvm::StructTyp
     return fn_type;
 }
 
-void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
+[[maybe_unused]] void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
 {
     // Create the analysis managers.
     llvm::LoopAnalysisManager LAM;
@@ -1117,6 +1135,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
     auto* cpu_struct = create_cpu_struct_type(*context);
 
+#ifndef NDEBUG
     // Sanity check
     auto* cpu_struct_layout = module->getDataLayout().getStructLayout(cpu_struct);
     auto* sr_struct_layout = module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
@@ -1147,6 +1166,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
            == offsetof(decltype(CPU::SR), Z));
     assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::C))
            == offsetof(decltype(CPU::SR), C));
+#endif // NDEBUG
 
     auto* bus_struct = llvm::StructType::create(*context, "emu_Bus"); // Just declared
 
@@ -1248,7 +1268,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     }
 
     // module->print(llvm::errs(), nullptr);
-    optimize(*module, llvm::OptimizationLevel::O3);
+    // optimize(*module, llvm::OptimizationLevel::O3);
     // module->print(llvm::errs(), nullptr);
 
     return module;
