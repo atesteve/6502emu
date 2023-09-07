@@ -35,9 +35,9 @@ struct addr_mode_result_t {
     int cycles;
 };
 
-using addr_fn_t = addr_mode_result_t (*)(Instruction const&, CPU const&, Bus const&, bool);
+using addr_fn_t = addr_mode_result_t (*)(Instruction const&, CPU const&, Bus const&, bool, bool);
 
-addr_mode_result_t addr_imm(Instruction const& inst, CPU const&, Bus const&, bool)
+addr_mode_result_t addr_imm(Instruction const& inst, CPU const&, Bus const&, bool, bool)
 {
     return {
         .addr = 0_w,
@@ -49,7 +49,8 @@ addr_mode_result_t addr_imm(Instruction const& inst, CPU const&, Bus const&, boo
 
 word_t decode_addr_abs(Instruction const& inst) { return assemble(inst.bytes[1], inst.bytes[2]); }
 
-addr_mode_result_t addr_abs(Instruction const& inst, CPU const&, Bus const& bus, bool dereference)
+addr_mode_result_t
+    addr_abs(Instruction const& inst, CPU const&, Bus const& bus, bool dereference, bool)
 {
     auto const addr = decode_addr_abs(inst);
     auto const op = dereference ? bus.read(addr) : 0_b;
@@ -62,38 +63,48 @@ addr_mode_result_t addr_abs(Instruction const& inst, CPU const&, Bus const& bus,
     };
 }
 
-addr_mode_result_t
-    addr_abs_X(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+addr_mode_result_t addr_abs_X(Instruction const& inst,
+                              CPU const& cpu,
+                              Bus const& bus,
+                              bool dereference,
+                              bool force_add_extra_cycle)
 {
     auto const base_addr = decode_addr_abs(inst);
     auto const effective_addr = base_addr + cpu.X;
     auto const op = dereference ? bus.read(effective_addr) : 0_b;
 
+    auto const extra_cycle = force_add_extra_cycle ? 1 : same_page(effective_addr, base_addr);
+
     return {
         .addr = effective_addr,
         .op = op,
         .size = 2_w,
-        .cycles = 3 + (!same_page(effective_addr, base_addr) || !dereference),
+        .cycles = 3 + extra_cycle,
     };
 }
 
-addr_mode_result_t
-    addr_abs_Y(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+addr_mode_result_t addr_abs_Y(Instruction const& inst,
+                              CPU const& cpu,
+                              Bus const& bus,
+                              bool dereference,
+                              bool force_add_extra_cycle)
 {
     auto const base_addr = decode_addr_abs(inst);
     auto const effective_addr = base_addr + cpu.Y;
     auto const op = dereference ? bus.read(effective_addr) : 0_b;
 
+    auto const extra_cycle = force_add_extra_cycle ? 1 : same_page(effective_addr, base_addr);
+
     return {
         .addr = effective_addr,
         .op = op,
         .size = 2_w,
-        .cycles = 3 + (!same_page(effective_addr, base_addr) || !dereference),
+        .cycles = 3 + extra_cycle,
     };
 }
 
 addr_mode_result_t
-    addr_X_ind(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+    addr_X_ind(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference, bool)
 {
     auto const zero_page_base = inst.bytes[1];
     auto const zero_page_addr = zero_page_base + cpu.X;
@@ -110,8 +121,11 @@ addr_mode_result_t
     };
 }
 
-addr_mode_result_t
-    addr_ind_Y(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+addr_mode_result_t addr_ind_Y(Instruction const& inst,
+                              CPU const& cpu,
+                              Bus const& bus,
+                              bool dereference,
+                              bool force_add_extra_cycle)
 {
     auto const zero_page_addr = inst.bytes[1];
     auto const base_addr_lo = bus.read(static_cast<word_t>(zero_page_addr));
@@ -120,15 +134,18 @@ addr_mode_result_t
     auto const effective_addr = base_addr + cpu.Y;
     auto const op = dereference ? bus.read(effective_addr) : 0_b;
 
+    auto const extra_cycle = force_add_extra_cycle ? 1 : same_page(effective_addr, base_addr);
+
     return {
         .addr = effective_addr,
         .op = op,
         .size = 1_w,
-        .cycles = 4 + (!same_page(effective_addr, base_addr) || !dereference),
+        .cycles = 4 + extra_cycle,
     };
 }
 
-addr_mode_result_t addr_zpg(Instruction const& inst, CPU const&, Bus const& bus, bool dereference)
+addr_mode_result_t
+    addr_zpg(Instruction const& inst, CPU const&, Bus const& bus, bool dereference, bool)
 {
     auto const addr = static_cast<word_t>(inst.bytes[1]);
     auto const op = dereference ? bus.read(addr) : 0_b;
@@ -141,7 +158,7 @@ addr_mode_result_t addr_zpg(Instruction const& inst, CPU const&, Bus const& bus,
 }
 
 addr_mode_result_t
-    addr_zpg_X(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+    addr_zpg_X(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference, bool)
 {
     auto const zero_page_base = inst.bytes[1];
     auto const addr = static_cast<word_t>(zero_page_base + cpu.X);
@@ -155,7 +172,7 @@ addr_mode_result_t
 }
 
 addr_mode_result_t
-    addr_zpg_Y(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference)
+    addr_zpg_Y(Instruction const& inst, CPU const& cpu, Bus const& bus, bool dereference, bool)
 {
     auto const zero_page_base = inst.bytes[1];
     auto const addr = static_cast<word_t>(zero_page_base + cpu.Y);
@@ -206,7 +223,7 @@ byte_t pop(CPU& cpu, Bus& bus)
 template<typename BinaryOp>
 uint64_t bin_logic_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
     auto const result = BinaryOp{}(cpu.A, op);
     assign_accumulator(cpu, result);
 
@@ -226,7 +243,7 @@ void perform_bin_addition(CPU& cpu, byte_t op)
 
 uint64_t add_op_bin(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
     perform_bin_addition(cpu, op);
     cpu.PC += 1_w + size;
     return 1 + cycles;
@@ -234,7 +251,7 @@ uint64_t add_op_bin(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_
 
 uint64_t add_op_dec(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
 
     auto const a_lo = cpu.A & 0xf_b;
     auto const a_hi = cpu.A >> 4;
@@ -276,7 +293,7 @@ uint64_t add_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode
 
 uint64_t sub_op_bin(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
     perform_bin_addition(cpu, ~op);
     cpu.PC += 1_w + size;
     return 1 + cycles;
@@ -284,7 +301,7 @@ uint64_t sub_op_bin(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_
 
 uint64_t sub_op_dec(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
 
     auto const a_lo = cpu.A & 0xf_b;
     auto const a_hi = cpu.A >> 4;
@@ -326,7 +343,7 @@ uint64_t sub_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode
 
 uint64_t cmp_op(Instruction const& inst, CPU& cpu, Bus& bus, byte_t reg_val, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
     auto const result = reg_val - op;
     cpu.SR.C = op <= reg_val;
     cpu.SR.N = is_negative(result);
@@ -338,7 +355,7 @@ uint64_t cmp_op(Instruction const& inst, CPU& cpu, Bus& bus, byte_t reg_val, add
 
 uint64_t load_op(Instruction const& inst, CPU& cpu, Bus& bus, byte_t* reg, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
     *reg = op;
     cpu.SR.N = is_negative(op);
     cpu.SR.Z = op == 0_b;
@@ -350,7 +367,7 @@ uint64_t load_op(Instruction const& inst, CPU& cpu, Bus& bus, byte_t* reg, addr_
 uint64_t
     store_op(Instruction const& inst, CPU& cpu, Bus& bus, byte_t reg_value, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, false);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, false, true);
     bus.write(addr, reg_value);
 
     cpu.PC += 1_w + size;
@@ -387,16 +404,15 @@ uint64_t shift_mem_op(Instruction const& inst,
                       Bus& bus,
                       shift_fn_t shift_fn,
                       bool roll,
-                      bool add_extra_cycle,
                       addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, true);
     auto const [result, carry] = shift_fn(op, roll ? cpu.SR.C : false);
     cpu.SR.C = carry;
     assign_memory(cpu, bus, addr, result);
 
     cpu.PC += size + 1_w;
-    return cycles + (add_extra_cycle ? 4 : 3);
+    return cycles + 3;
 }
 
 uint64_t shift_A_op(Instruction const&, CPU& cpu, shift_fn_t shift_fn, bool roll)
@@ -411,7 +427,7 @@ uint64_t shift_A_op(Instruction const&, CPU& cpu, shift_fn_t shift_fn, bool roll
 
 uint64_t BIT_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, false);
 
     cpu.SR.N = (op & 0x80_b) != 0_b;
     cpu.SR.V = (op & 0x40_b) != 0_b;
@@ -457,7 +473,7 @@ uint64_t set_flag_op(Instruction const&, CPU& cpu, Fn&& set_fn)
 uint64_t
     inc_dec_mem_op(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_mode, bool increase)
 {
-    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true);
+    auto const [addr, op, size, cycles] = addr_mode(inst, cpu, bus, true, true);
     auto const result = increase ? op + 1_b : op - 1_b;
     assign_memory(cpu, bus, addr, result);
 
@@ -546,28 +562,28 @@ uint64_t CPX_zpg(Instruction const& inst, CPU& cpu, Bus& bus) { return cmp_op(in
 uint64_t CPX_abs(Instruction const& inst, CPU& cpu, Bus& bus) { return cmp_op(inst, cpu, bus, cpu.X, addr_abs); }
 
 uint64_t ASL_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_left, false); }
-uint64_t ASL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_zpg); }
-uint64_t ASL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_abs); }
-uint64_t ASL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, false, addr_zpg_X); }
-uint64_t ASL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, true, addr_abs_X); }
+uint64_t ASL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, addr_zpg); }
+uint64_t ASL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, false, addr_abs); }
+uint64_t ASL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, addr_zpg_X); }
+uint64_t ASL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, false, addr_abs_X); }
 
 uint64_t LSR_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_right, false); }
-uint64_t LSR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_zpg); }
-uint64_t LSR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_abs); }
-uint64_t LSR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, false, addr_zpg_X); }
-uint64_t LSR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, true, addr_abs_X); }
+uint64_t LSR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, addr_zpg); }
+uint64_t LSR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, false, addr_abs); }
+uint64_t LSR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, addr_zpg_X); }
+uint64_t LSR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, false, addr_abs_X); }
 
 uint64_t ROL_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_left, true); }
-uint64_t ROL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_zpg); }
-uint64_t ROL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_abs); }
-uint64_t ROL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, false, addr_zpg_X); }
-uint64_t ROL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, true, addr_abs_X); }
+uint64_t ROL_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, addr_zpg); }
+uint64_t ROL_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_left, true, addr_abs); }
+uint64_t ROL_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, addr_zpg_X); }
+uint64_t ROL_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_left, true, addr_abs_X); }
 
 uint64_t ROR_A(Instruction const& inst, CPU& cpu, Bus&)         { return shift_A_op(inst, cpu, shift_right, true); }
-uint64_t ROR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_zpg); }
-uint64_t ROR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_abs); }
-uint64_t ROR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, false, addr_zpg_X); }
-uint64_t ROR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, true, addr_abs_X); }
+uint64_t ROR_zpg(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, addr_zpg); }
+uint64_t ROR_abs(Instruction const& inst, CPU& cpu, Bus& bus)   { return shift_mem_op(inst, cpu, bus, shift_right, true, addr_abs); }
+uint64_t ROR_zpg_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, addr_zpg_X); }
+uint64_t ROR_abs_X(Instruction const& inst, CPU& cpu, Bus& bus) { return shift_mem_op(inst, cpu, bus, shift_right, true, addr_abs_X); }
 
 uint64_t BIT_zpg(Instruction const& inst, CPU& cpu, Bus& bus) { return BIT_op(inst, cpu, bus, addr_zpg); }
 uint64_t BIT_abs(Instruction const& inst, CPU& cpu, Bus& bus) { return BIT_op(inst, cpu, bus, addr_abs); }

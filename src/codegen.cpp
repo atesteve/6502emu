@@ -188,7 +188,7 @@ auto* same_page(Context const& c, llvm::Value* addr_1, llvm::Value* addr_2)
 
 // Address mode codegen
 
-addr_mode_result_t addr_imm(Context const& c, bool)
+addr_mode_result_t addr_imm(Context const& c, bool, bool)
 {
     return {
         .addr = nullptr,
@@ -197,7 +197,7 @@ addr_mode_result_t addr_imm(Context const& c, bool)
     };
 }
 
-addr_mode_result_t addr_abs(Context const& c, bool dereference)
+addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
 {
     auto* const addr = decode_addr_abs(c);
     auto* const op = dereference ? read_bus(c, addr) : nullptr;
@@ -209,7 +209,7 @@ addr_mode_result_t addr_abs(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_abs_X(Context const& c, bool dereference)
+addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_extra_cycle)
 {
     auto* const base_addr = decode_addr_abs(c);
     auto* const x_reg = load_reg(c, RegOffset::X);
@@ -220,11 +220,15 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference)
 
     if (dereference) {
         op = read_bus(c, effective_addr);
+    }
+
+    if (force_extra_cycle) {
+        extra_cycle = int_const<uint64_t>(c, 1);
+    } else {
+
         auto* const in_same_page = same_page(c, effective_addr, base_addr);
         auto* const not_in_same_page = c.builder->CreateNot(in_same_page);
         extra_cycle = c.builder->CreateZExt(not_in_same_page, int_type<uint64_t>(c));
-    } else {
-        extra_cycle = int_const<uint64_t>(c, 1);
     }
 
     return {
@@ -234,7 +238,7 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_abs_Y(Context const& c, bool dereference)
+addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
     auto* const base_addr = decode_addr_abs(c);
     auto* const y_reg = load_reg(c, RegOffset::Y);
@@ -246,11 +250,14 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference)
 
     if (dereference) {
         op = read_bus(c, effective_addr);
+    }
+
+    if (force_extra_cycle) {
+        extra_cycle = int_const<uint64_t>(c, 1);
+    } else {
         auto* const in_same_page = same_page(c, effective_addr, base_addr);
         auto* const not_in_same_page = c.builder->CreateNot(in_same_page);
         extra_cycle = c.builder->CreateZExt(not_in_same_page, int_type<uint64_t>(c));
-    } else {
-        extra_cycle = int_const<uint64_t>(c, 1);
     }
 
     return {
@@ -260,7 +267,7 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_X_ind(Context const& c, bool dereference)
+addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
     auto* const x_reg = load_reg(c, RegOffset::X);
@@ -281,7 +288,7 @@ addr_mode_result_t addr_X_ind(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_ind_Y(Context const& c, bool dereference)
+addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
     auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
     auto* const zero_page_base_16 = c.builder->CreateZExt(zero_page_base, int_type<uint16_t>(c));
@@ -299,11 +306,14 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference)
 
     if (dereference) {
         op = read_bus(c, effective_addr);
+    }
+
+    if (force_extra_cycle) {
+        extra_cycle = int_const<uint64_t>(c, 1);
+    } else {
         auto* const in_same_page = same_page(c, effective_addr, base_addr);
         auto* const not_in_same_page = c.builder->CreateNot(in_same_page);
         extra_cycle = c.builder->CreateZExt(not_in_same_page, int_type<uint64_t>(c));
-    } else {
-        extra_cycle = int_const<uint64_t>(c, 1);
     }
 
     return {
@@ -313,7 +323,7 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_zpg(Context const& c, bool dereference)
+addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 {
     auto* const addr = int_const(c, static_cast<uint16_t>(c.inst->bytes[1]));
     auto* const op = dereference ? read_bus(c, addr) : nullptr;
@@ -324,7 +334,7 @@ addr_mode_result_t addr_zpg(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_zpg_X(Context const& c, bool dereference)
+addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
     auto* const x_reg = load_reg(c, RegOffset::X);
@@ -338,7 +348,7 @@ addr_mode_result_t addr_zpg_X(Context const& c, bool dereference)
     };
 }
 
-addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference)
+addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
     auto* const y_reg = load_reg(c, RegOffset::Y);
@@ -374,7 +384,9 @@ void add_cycle_counter(Context const& c, llvm::Value* value)
     c.builder->CreateStore(new_counter, c.cycle_counter_ptr);
 }
 
-using addr_fn_t = addr_mode_result_t (*)(Context const&, bool);
+using addr_fn_t = addr_mode_result_t (*)(Context const& c,
+                                         bool dereference,
+                                         bool force_add_extra_cycle);
 using build_bin_fn_t = llvm::Value* (llvm::IRBuilder<>::*)(llvm::Value*,
                                                            llvm::Value*,
                                                            const llvm::Twine&);
@@ -453,7 +465,7 @@ void store_sr(Context const& c, llvm::Value* value)
 
 llvm::Value* bin_logic_op(Context const& c, build_bin_fn_t bin_fn, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
     auto* const a_reg = load_reg(c, RegOffset::A);
     auto* const result = std::invoke(bin_fn, c.builder, a_reg, op, "");
     store_reg(c, RegOffset::A, result);
@@ -488,21 +500,16 @@ using shift_fn_t = std::pair<llvm::Value*, llvm::Value*> (*)(Context const& c,
                                                              llvm::Value* value,
                                                              llvm::Value* shift_in);
 
-llvm::Value* shift_mem_op(Context const& c,
-                          shift_fn_t fn,
-                          bool roll,
-                          bool add_extra_cycle,
-                          addr_fn_t addr_mode)
+llvm::Value* shift_mem_op(Context const& c, shift_fn_t fn, bool roll, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, true);
     auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, FlagOffset::C))
                                 : static_cast<llvm::Value*>(int_const(c, false));
     auto const [result, carry_flag] = fn(c, op, shift_in);
     store_flag(c, FlagOffset::C, carry_flag);
     write_bus(c, addr, result);
     set_n_z(c, result);
-    add_cycle_counter(
-        c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, add_extra_cycle ? 4 : 3)));
+    add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 3)));
     return nullptr;
 }
 
@@ -550,7 +557,7 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
 
 llvm::Value* cmp_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
     auto* const reg = load_reg(c, reg_offset);
     auto* const result = c.builder->CreateSub(reg, op);
 
@@ -584,7 +591,7 @@ llvm::Value* set_flag_op(Context const& c, FlagOffset flag_offset, bool value)
 
 llvm::Value* inc_dec_mem_op(Context const& c, addr_fn_t addr_mode, bool increase)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
     auto* const result = increase ? c.builder->CreateAdd(op, int_const(c, 1_b))
                                   : c.builder->CreateSub(op, int_const(c, 1_b));
     write_bus(c, addr, result);
@@ -606,7 +613,7 @@ llvm::Value* inc_dec_reg_op(Context const& c, RegOffset reg_offset, bool increas
 
 llvm::Value* store_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, false);
+    auto const [addr, op, cycles] = addr_mode(c, false, true);
     auto* const reg = load_reg(c, reg_offset);
     write_bus(c, addr, reg);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -615,7 +622,7 @@ llvm::Value* store_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mod
 
 llvm::Value* load_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
     store_reg(c, reg_offset, op);
     set_n_z(c, op);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -624,7 +631,7 @@ llvm::Value* load_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode
 
 llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
     auto* const fn = add ? c.add_fn : c.sub_fn;
     auto* const call = c.builder->CreateCall(fn->getFunctionType(), fn, {c.fn->getArg(0), op});
     call->setCallingConv(llvm::CallingConv::Fast);
@@ -634,7 +641,7 @@ llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 
 llvm::Value* BIT_op(Context const& c, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true);
+    auto const [addr, op, cycles] = addr_mode(c, true, false);
 
     auto* const n_bit = c.builder->CreateAnd(op, int_const(c, 0x80_b));
     auto* const new_n =
@@ -694,28 +701,28 @@ llvm::Value* EOR_abs_Y(Context const& c) { return bin_logic_op(c, &llvm::IRBuild
 llvm::Value* EOR_abs_X(Context const& c) { return bin_logic_op(c, &llvm::IRBuilder<>::CreateXor, addr_abs_X); }
 
 llvm::Value* ASL_A(Context const& c)     { return shift_A_op(c, shift_left, false); }
-llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, false, false, addr_zpg); }
-llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op(c, shift_left, false, false, addr_abs); }
-llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, false, false, addr_zpg_X); }
-llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, false, true, addr_abs_X); }
+llvm::Value* ASL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, false, addr_zpg); }
+llvm::Value* ASL_abs(Context const& c)   { return shift_mem_op(c, shift_left, false, addr_abs); }
+llvm::Value* ASL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, false, addr_zpg_X); }
+llvm::Value* ASL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, false, addr_abs_X); }
 
 llvm::Value* LSR_A(Context const& c)     { return shift_A_op(c, shift_right, false); }
-llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, false, false, addr_zpg); }
-llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op(c, shift_right, false, false, addr_abs); }
-llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, false, false, addr_zpg_X); }
-llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, false, true, addr_abs_X); }
+llvm::Value* LSR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, false, addr_zpg); }
+llvm::Value* LSR_abs(Context const& c)   { return shift_mem_op(c, shift_right, false, addr_abs); }
+llvm::Value* LSR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, false, addr_zpg_X); }
+llvm::Value* LSR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, false, addr_abs_X); }
 
 llvm::Value* ROL_A(Context const& c)     { return shift_A_op(c, shift_left, true); }
-llvm::Value* ROL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, true, false, addr_zpg); }
-llvm::Value* ROL_abs(Context const& c)   { return shift_mem_op(c, shift_left, true, false, addr_abs); }
-llvm::Value* ROL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, true, false, addr_zpg_X); }
-llvm::Value* ROL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, true, true, addr_abs_X); }
+llvm::Value* ROL_zpg(Context const& c)   { return shift_mem_op(c, shift_left, true, addr_zpg); }
+llvm::Value* ROL_abs(Context const& c)   { return shift_mem_op(c, shift_left, true, addr_abs); }
+llvm::Value* ROL_zpg_X(Context const& c) { return shift_mem_op(c, shift_left, true, addr_zpg_X); }
+llvm::Value* ROL_abs_X(Context const& c) { return shift_mem_op(c, shift_left, true, addr_abs_X); }
 
 llvm::Value* ROR_A(Context const& c)     { return shift_A_op(c, shift_right, true); }
-llvm::Value* ROR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, true, false, addr_zpg); }
-llvm::Value* ROR_abs(Context const& c)   { return shift_mem_op(c, shift_right, true, false, addr_abs); }
-llvm::Value* ROR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, true, false, addr_zpg_X); }
-llvm::Value* ROR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, true, true, addr_abs_X); }
+llvm::Value* ROR_zpg(Context const& c)   { return shift_mem_op(c, shift_right, true, addr_zpg); }
+llvm::Value* ROR_abs(Context const& c)   { return shift_mem_op(c, shift_right, true, addr_abs); }
+llvm::Value* ROR_zpg_X(Context const& c) { return shift_mem_op(c, shift_right, true, addr_zpg_X); }
+llvm::Value* ROR_abs_X(Context const& c) { return shift_mem_op(c, shift_right, true, addr_abs_X); }
 
 llvm::Value* ADC_X_ind(Context const& c) { return add_sub_op(c, addr_X_ind, true); }
 llvm::Value* ADC_zpg(Context const& c)   { return add_sub_op(c, addr_zpg,   true); }
