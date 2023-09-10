@@ -1197,6 +1197,11 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         },
         false);
 
+    auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
+    builder->SetInsertPoint(entry_block);
+    auto* const cycle_counter = builder->CreateAlloca(llvm::IntegerType::getInt64Ty(*context));
+    builder->CreateStore(int_const<uint64_t>(*context, 0), cycle_counter);
+
     std::unordered_map<word_t, llvm::BasicBlock*> blocks;
     for (auto const& entry : flow) {
         blocks.emplace(
@@ -1205,9 +1210,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     }
 
     auto first = blocks.at(flow.begin()->first);
-    builder->SetInsertPoint(first);
-    auto* const cycle_counter = builder->CreateAlloca(llvm::IntegerType::getInt64Ty(*context));
-    builder->CreateStore(int_const<uint64_t>(*context, 0), cycle_counter);
+    builder->CreateBr(first);
 
     for (auto const& entry : flow) {
         auto* const block = blocks.at(entry.first);

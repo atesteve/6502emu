@@ -78,7 +78,7 @@ struct CPU {
 class Bus {
 public:
     explicit Bus();
-    void load_file(std::filesystem::path const& p);
+    void load_file(std::filesystem::path const& p, word_t address);
     byte_t read(word_t address) const;
     void write(word_t address, byte_t value);
 

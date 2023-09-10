@@ -40,6 +40,9 @@ target_link_libraries(${TARGET_COMMON} PUBLIC fmt::fmt)
 find_package(spdlog REQUIRED)
 target_link_libraries(${TARGET_COMMON} PUBLIC spdlog::spdlog)
 
+find_package(Boost COMPONENTS program_options REQUIRED)
+target_link_libraries(${TARGET} PRIVATE Boost::program_options)
+
 find_package(GTest REQUIRED)
 target_link_libraries(${TARGET_TEST} PRIVATE GTest::GTest)
 
