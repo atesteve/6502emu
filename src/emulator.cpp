@@ -9,12 +9,17 @@
 
 #include <spdlog/spdlog.h>
 
+#include <atomic>
+
 namespace emu {
 namespace {
 llvm::ExitOnError exit_on_error;
 } // namespace
 
-Emulator::Emulator() {}
+Emulator::Emulator()
+    : _thread_pool{std::make_unique<llvm::ThreadPool>()}
+{}
+
 Emulator::~Emulator() {}
 
 uint64_t Emulator::run()
@@ -45,9 +50,37 @@ struct JitFn {
     std::unique_ptr<llvm::orc::LLJIT> jit = exit_on_error(emu::make_jit());
     std::map<word_t, control_block> flow;
     std::unique_ptr<llvm::Module> module;
-    std::mutex mutex;
-    jit_fn_t fn = nullptr;
+    std::atomic<jit_fn_t> fn = nullptr;
 };
+
+void Emulator::jit_function(word_t addr)
+{
+    std::pair<decltype(_jit_functions)::iterator, bool> it;
+    {
+        std::lock_guard lock{_map_mutex};
+        it = _jit_functions.try_emplace(addr, nullptr);
+    }
+
+    if (!it.second) {
+        return;
+    }
+
+    it.first->second = std::make_unique<JitFn>();
+    JitFn& jit_fn = *it.first->second;
+
+    std::unordered_set<word_t> function_calls;
+
+    for (auto call_addr : function_calls) {
+        _thread_pool->async([this, call_addr] { jit_function(call_addr); });
+    }
+
+    jit_fn.flow = emu::build_control_flow(_bus, addr, &function_calls);
+    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow);
+    exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));
+    auto const fn_addr = exit_on_error(jit_fn.jit->lookup(fmt::format("fn_{:04x}", addr)));
+    auto* const fn = reinterpret_cast<jit_fn_t>(fn_addr.getValue());
+    jit_fn.fn = fn;
+}
 
 JitFn* Emulator::get_jit_fn(word_t addr)
 {
@@ -66,13 +99,12 @@ uint64_t Emulator::call_function(word_t addr)
     auto* jit_fn = get_jit_fn(addr);
 
     if (jit_fn == nullptr) {
+        _thread_pool->async([this, addr] { jit_function(addr); });
+        // Run interpreter while the function is being compiled
         ret = run();
     } else {
-        jit_fn_t fn = nullptr;
-        {
-            std::lock_guard lock{jit_fn->mutex};
-            fn = jit_fn->fn;
-        }
+        jit_fn_t fn = jit_fn->fn;
+
         if (!fn) {
             ret = run();
         } else {
@@ -91,36 +123,8 @@ void Emulator::initialize(std::string_view image_file, word_t load_address, word
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
 
-    auto& jit_fn = *_jit_functions.emplace(entry_point, std::make_unique<JitFn>()).first->second;
-
-    std::unordered_set<word_t> function_calls;
-
-    jit_fn.flow = emu::build_control_flow(_bus, entry_point, &function_calls);
-    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow);
-    exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));
-    auto const fn = exit_on_error(jit_fn.jit->lookup(fmt::format("fn_{:04x}", entry_point)));
-    jit_fn.fn = reinterpret_cast<jit_fn_t>(fn.getValue());
-
-    size_t prev_size = 0;
-    while (prev_size != function_calls.size()) {
-        prev_size = function_calls.size();
-        for (auto fn_addr : function_calls) {
-            auto& jit = _jit_functions[fn_addr];
-            if (jit != nullptr) {
-                continue;
-            }
-            jit = std::make_unique<JitFn>();
-
-            jit->flow = emu::build_control_flow(_bus, fn_addr, &function_calls);
-            jit->module = emu::codegen(jit->llvm_context, jit->flow);
-            exit_on_error(emu::materialize(*jit->jit, jit->llvm_context, std::move(jit->module)));
-            auto const fn = exit_on_error(jit->jit->lookup(fmt::format("fn_{:04x}", fn_addr)));
-            jit->fn = reinterpret_cast<jit_fn_t>(fn.getValue());
-        }
-    }
-
-    // auto jit = exit_on_error(emu::make_jit());
-    // exit_on_error(emu::materialize(*jit, context, std::move(module)));
+    jit_function(entry_point);
+    _thread_pool->wait();
 }
 
 } // namespace emu

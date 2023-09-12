@@ -2,6 +2,8 @@
 
 #include "cpu.h"
 
+#include <llvm/Support/ThreadPool.h>
+
 #include <string_view>
 #include <memory>
 #include <unordered_map>
@@ -25,6 +27,7 @@ public:
     ~Emulator();
 
 private:
+    void jit_function(word_t addr);
     JitFn* get_jit_fn(word_t addr);
 
     CPU _cpu{};
@@ -32,6 +35,7 @@ private:
     uint64_t _clock_counter{};
     std::mutex _map_mutex;
     std::unordered_map<word_t, std::unique_ptr<JitFn>> _jit_functions;
+    std::unique_ptr<llvm::ThreadPool> _thread_pool{};
 };
 
 } // namespace emu
