@@ -21,6 +21,15 @@ class SafeInt {
 
 public:
     ALWAYS_INLINE constexpr SafeInt() noexcept = default;
+
+    ALWAYS_INLINE constexpr SafeInt(SafeInt const&) noexcept = default;
+    ALWAYS_INLINE constexpr SafeInt(SafeInt&&) noexcept = default;
+
+    ALWAYS_INLINE constexpr SafeInt& operator=(SafeInt const&) noexcept = default;
+    ALWAYS_INLINE constexpr SafeInt& operator=(SafeInt&&) noexcept = default;
+
+    ALWAYS_INLINE constexpr ~SafeInt() noexcept = default;
+
     ALWAYS_INLINE explicit constexpr SafeInt(Int v) noexcept
         : _v{v}
     {}
@@ -30,16 +39,6 @@ public:
     ALWAYS_INLINE explicit constexpr SafeInt(Int2 v) noexcept
         : _v{static_cast<Int>(v)}
     {}
-
-    ALWAYS_INLINE constexpr SafeInt(SafeInt const& o) noexcept
-        : _v{o._v}
-    {}
-
-    ALWAYS_INLINE constexpr SafeInt& operator=(SafeInt const& o) noexcept
-    {
-        _v = o._v;
-        return *this;
-    }
 
     template<std::integral Int2, typename Token2>
         requires(!std::is_same_v<Int, Int2>)

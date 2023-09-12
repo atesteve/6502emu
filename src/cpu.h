@@ -80,11 +80,11 @@ public:
     explicit Bus();
     void load_file(std::filesystem::path const& p, word_t address);
 
-    byte_t read(word_t address) const;
-    void write(word_t address, byte_t value);
+    byte_t read(word_t address) const noexcept;
+    void write(word_t address, byte_t value) noexcept;
 
-    byte_t read_memory(word_t address) const;
-    void write_memory(word_t address, byte_t value);
+    byte_t read_memory(word_t address) const noexcept;
+    void write_memory(word_t address, byte_t value) noexcept;
 
     std::vector<byte_t> memory_space;
 };

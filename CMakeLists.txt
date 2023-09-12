@@ -7,9 +7,15 @@ project(${TARGET} VERSION 0.0.1 LANGUAGES C CXX)
 include(CTest)
 enable_testing()
 
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
 add_compile_options(-Wall -Wextra -pedantic)
-#add_compile_options(-pg -g)
-#add_link_options(-pg -g)
+add_compile_options(-g3)
+#add_compile_options(-pg)
+add_link_options(-g3)
+#add_link_options(-pg)
 
 set(SOURCES
     src/instruction.cpp

@@ -33,7 +33,7 @@ void Bus::load_file(std::filesystem::path const& p, word_t address)
     }
 }
 
-byte_t Bus::read(word_t address) const
+byte_t Bus::read(word_t address) const noexcept
 {
     if (address == 0xf004_w) {
         static std::chrono::steady_clock::time_point prev{};
@@ -46,7 +46,7 @@ byte_t Bus::read(word_t address) const
     return memory_space[static_cast<size_t>(address)];
 }
 
-void Bus::write(word_t address, byte_t value)
+void Bus::write(word_t address, byte_t value) noexcept
 {
     if (address == 0xf001_w) {
         std::cout << static_cast<char>(value);
@@ -55,9 +55,12 @@ void Bus::write(word_t address, byte_t value)
     memory_space[static_cast<size_t>(address)] = value;
 }
 
-byte_t Bus::read_memory(word_t address) const { return memory_space[static_cast<size_t>(address)]; }
+byte_t Bus::read_memory(word_t address) const noexcept
+{
+    return memory_space[static_cast<size_t>(address)];
+}
 
-void Bus::write_memory(word_t address, byte_t value)
+void Bus::write_memory(word_t address, byte_t value) noexcept
 {
     memory_space[static_cast<size_t>(address)] = value;
 }

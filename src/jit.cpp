@@ -10,13 +10,13 @@
 namespace emu {
 namespace {
 
-extern "C" uint8_t read_bus(Bus* bus, uint16_t address)
+extern "C" uint8_t read_bus(Bus* bus, uint16_t address) noexcept
 {
     // Forward
     return static_cast<uint8_t>(bus->read(word_t{address}));
 }
 
-extern "C" void write_bus(Bus* bus, uint16_t address, uint8_t value)
+extern "C" void write_bus(Bus* bus, uint16_t address, uint8_t value) noexcept
 {
     // Forward
     bus->write(word_t{address}, byte_t{value});
