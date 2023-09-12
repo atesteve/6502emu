@@ -35,8 +35,8 @@ private:
     uint64_t _intr_clock_counter{};
     uint64_t _jit_clock_counter{};
     std::mutex _map_mutex;
-    std::unordered_map<word_t, std::unique_ptr<JitFn>> _jit_functions;
-    std::unordered_map<word_t, jit_fn_t> _jit_functions_cache;
+    std::vector<std::unique_ptr<JitFn>> _jit_functions;
+    std::vector<jit_fn_t> _jit_functions_cache;
     std::unique_ptr<llvm::ThreadPool> _thread_pool{};
 };
 

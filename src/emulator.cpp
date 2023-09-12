@@ -15,8 +15,18 @@ namespace {
 llvm::ExitOnError exit_on_error;
 } // namespace
 
+struct JitFn {
+    llvm::orc::ThreadSafeContext llvm_context = std::make_unique<llvm::LLVMContext>();
+    std::unique_ptr<llvm::orc::LLJIT> jit = exit_on_error(emu::make_jit());
+    std::map<word_t, control_block> flow;
+    std::unique_ptr<llvm::Module> module;
+    std::atomic<jit_fn_t> fn = nullptr;
+};
+
 Emulator::Emulator()
-    : _thread_pool{std::make_unique<llvm::ThreadPool>()}
+    : _jit_functions(size_t{0x10000})
+    , _jit_functions_cache(size_t{0x10000})
+    , _thread_pool{std::make_unique<llvm::ThreadPool>()}
 {}
 
 Emulator::~Emulator() {}
@@ -42,28 +52,22 @@ uint64_t Emulator::run()
     }
 }
 
-struct JitFn {
-    llvm::orc::ThreadSafeContext llvm_context = std::make_unique<llvm::LLVMContext>();
-    std::unique_ptr<llvm::orc::LLJIT> jit = exit_on_error(emu::make_jit());
-    std::map<word_t, control_block> flow;
-    std::unique_ptr<llvm::Module> module;
-    std::atomic<jit_fn_t> fn = nullptr;
-};
-
 void Emulator::jit_function(word_t addr)
 {
-    std::pair<decltype(_jit_functions)::iterator, bool> it;
+    auto const index = static_cast<size_t>(addr);
+    JitFn* jit_fn_ptr;
+
     {
         std::lock_guard lock{_map_mutex};
-        it = _jit_functions.try_emplace(addr, nullptr);
+        auto& ptr = _jit_functions[index];
+        if (ptr != nullptr) {
+            return;
+        }
+        ptr = std::make_unique<JitFn>();
+        jit_fn_ptr = ptr.get();
     }
 
-    if (!it.second) {
-        return;
-    }
-
-    it.first->second = std::make_unique<JitFn>();
-    JitFn& jit_fn = *it.first->second;
+    JitFn& jit_fn = *jit_fn_ptr;
 
     std::unordered_set<word_t> function_calls;
 
@@ -82,18 +86,15 @@ void Emulator::jit_function(word_t addr)
 JitFn* Emulator::get_jit_fn(word_t addr)
 {
     std::lock_guard lock{_map_mutex};
-    auto it = _jit_functions.find(addr);
-    if (it == _jit_functions.end()) {
-        return nullptr;
-    }
-    return it->second.get();
+    return _jit_functions[static_cast<size_t>(addr)].get();
 }
 
 uint64_t Emulator::call_function(word_t addr)
 {
-    auto const cache_fn = _jit_functions_cache.find(addr);
-    if (cache_fn != _jit_functions_cache.end()) {
-        auto const ret = cache_fn->second(_cpu, _bus, _bus.memory_space.data(), *this);
+    auto const index = static_cast<size_t>(addr);
+    auto const cache_fn = _jit_functions_cache[index];
+    if (cache_fn != nullptr) {
+        auto const ret = cache_fn(_cpu, _bus, _bus.memory_space.data(), *this);
         _jit_clock_counter += ret;
         return ret;
     }
@@ -110,7 +111,7 @@ uint64_t Emulator::call_function(word_t addr)
         if (!fn) {
             return run();
         } else {
-            _jit_functions_cache.emplace(addr, fn);
+            _jit_functions_cache[index] = fn;
             auto const ret = fn(_cpu, _bus, _bus.memory_space.data(), *this);
             _jit_clock_counter += ret;
             return ret;
