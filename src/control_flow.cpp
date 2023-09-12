@@ -19,7 +19,9 @@ enum class JumpError {
     JUMP_TO_MIDDLE_OF_INSTRUCTION,
 };
 
-std::map<word_t, control_block> build_control_flow(Bus const& bus, word_t entry_point)
+std::map<word_t, control_block> build_control_flow(Bus const& bus,
+                                                   word_t entry_point,
+                                                   std::unordered_set<word_t>* function_calls)
 {
     std::map<word_t, control_block> block_map;
     auto const first_it = block_map.emplace(entry_point, control_block{}).first;
@@ -125,9 +127,17 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus, word_t entry_
         block->instructions.push_back(inst::Instruction{block_entry_addr, bus});
         while (!block->complete) {
             inst::Instruction const& inst = block->instructions.back();
+            if (!inst.is_valid()) {
+                throw std::runtime_error{
+                    fmt::format("Invalid instruction: {}", inst.disassemble())};
+            }
             block->last_addr = inst.pc + word_t{inst.length} - 1_w;
             auto const not_taken = inst.get_not_taken_addr();
             auto const taken = inst.get_taken_addr();
+
+            if (inst.is_jsr() && function_calls != nullptr) {
+                function_calls->insert(inst.decode_abs_addr());
+            }
 
             if (taken && not_taken) {
                 // Branch instruction

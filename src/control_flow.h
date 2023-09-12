@@ -5,6 +5,7 @@
 #include "instruction.h"
 
 #include <map>
+#include <unordered_set>
 
 namespace emu {
 
@@ -16,7 +17,9 @@ struct control_block {
     bool complete{};
 };
 
-[[nodiscard]] std::map<word_t, control_block> build_control_flow(Bus const& bus,
-                                                                 word_t entry_point);
+[[nodiscard]] std::map<word_t, control_block>
+    build_control_flow(Bus const& bus,
+                       word_t entry_point,
+                       std::unordered_set<word_t>* function_calls = nullptr);
 
 } // namespace emu

@@ -17,6 +17,7 @@
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/ModRef.h>
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 
@@ -33,6 +34,9 @@ using namespace emu::literals;
 
 namespace emu {
 namespace {
+
+constexpr word_t VECTOR_BRK_LO = 0xfffe_w;
+constexpr word_t VECTOR_BRK_HI = 0xffff_w;
 
 constexpr word_t STACK_BASE = 0x100_w;
 
@@ -64,6 +68,7 @@ struct Context {
     llvm::Function* write_bus_fn{};
     llvm::Function* add_fn{};
     llvm::Function* sub_fn{};
+    llvm::Function* call_function_fn{};
     llvm::Value* cycle_counter_ptr{};
     llvm::Module* module{};
 };
@@ -139,6 +144,24 @@ void store_reg(Context const& c, RegOffset offset, llvm::Value* value)
     c.builder->CreateStore(value, p);
 }
 
+void store_pc(Context const& c, llvm::Value* addr)
+{
+    auto* p =
+        c.builder->CreateGEP(c.cpu_type,
+                             c.fn->getArg(0),
+                             {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
+    c.builder->CreateStore(addr, p);
+}
+
+llvm::Value* load_pc(Context const& c)
+{
+    auto* p =
+        c.builder->CreateGEP(c.cpu_type,
+                             c.fn->getArg(0),
+                             {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
+    return c.builder->CreateLoad(int_type<uint16_t>(c), p);
+}
+
 auto* load_flag(Context const& c, FlagOffset offset)
 {
     auto* p = c.builder->CreateGEP(c.cpu_type,
@@ -163,7 +186,8 @@ auto* read_bus(Context const& c, llvm::Value* addr)
 {
     auto* const call = c.builder->CreateCall(
         c.read_bus_fn->getFunctionType(), c.read_bus_fn, {c.fn->getArg(1), addr});
-    call->addFnAttr(llvm::Attribute::AttrKind::InaccessibleMemOnly);
+    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     return call;
 }
 
@@ -171,7 +195,42 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
 {
     auto* const call = c.builder->CreateCall(
         c.write_bus_fn->getFunctionType(), c.write_bus_fn, {c.fn->getArg(1), addr, value});
-    call->addFnAttr(llvm::Attribute::AttrKind::InaccessibleMemOnly);
+    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+}
+
+void add_cycle_counter(Context const& c, llvm::Value* value);
+
+void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
+{
+    auto* const result = c.builder->CreateCall(
+        c.call_function_fn->getFunctionType(), c.call_function_fn, {c.fn->getArg(2), addr});
+
+    add_cycle_counter(c, result);
+
+    // After the function call returns, we need to make sure that the PC points to the correct
+    // location and so it is safe to continue
+    auto* const current_pc = load_pc(c);
+    auto* const eq = c.builder->CreateCmp(
+        llvm::CmpInst::Predicate::ICMP_EQ, current_pc, int_const(c, next_addr));
+
+    c.builder->CreateIntrinsic(
+        llvm::Intrinsic::expect, {int_type<bool>(c)}, {eq, int_const(c, true)});
+
+    auto* const block_eq =
+        llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_eq", next_addr), c.fn);
+    auto* const block_ne =
+        llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_ne", next_addr), c.fn);
+
+    c.builder->CreateCondBr(eq, block_eq, block_ne);
+
+    // If the PC after return does not match the expected PC, return
+    c.builder->SetInsertPoint(block_ne);
+    auto* const cycles = c.builder->CreateLoad(int_type<uint64_t>(c), c.cycle_counter_ptr);
+    c.builder->CreateRet(cycles);
+
+    // Otherwise, just continue
+    c.builder->SetInsertPoint(block_eq);
 }
 
 auto* decode_addr_abs(Context const& c)
@@ -879,7 +938,8 @@ llvm::Value* RTS_impl(Context const& c)
 {
     auto* const new_pc_lo = c.builder->CreateZExt(pop(c), int_type<uint16_t>(c));
     auto* const new_pc_hi = c.builder->CreateZExt(pop(c), int_type<uint16_t>(c));
-    auto* const new_pc = assemble(c, new_pc_lo, new_pc_hi);
+    auto* const new_pc_m1 = assemble(c, new_pc_lo, new_pc_hi);
+    auto* const new_pc = c.builder->CreateAdd(new_pc_m1, int_const(c, 1_w));
     add_cycle_counter(c, int_const<uint64_t>(c, 6));
     return new_pc;
 }
@@ -914,16 +974,33 @@ llvm::Value* JMP_ind(Context const& c)
 
 llvm::Value* JSR_abs(Context const& c)
 {
-    (void)c;
-    spdlog::info("Unimplemented JSR_abs!");
-    return nullptr;
+    auto* const new_pc = decode_addr_abs(c);
+
+    auto const next_pc = c.inst->pc + 2_w;
+    push(c, int_const(c, static_cast<byte_t>(next_pc >> 8)));
+    push(c, int_const(c, static_cast<byte_t>(next_pc)));
+
+    add_cycle_counter(c, int_const<uint64_t>(c, 6));
+
+    return new_pc;
 }
 
 llvm::Value* BRK_impl(Context const& c)
 {
-    (void)c;
-    spdlog::info("Unimplemented BRK_impl!");
-    return nullptr;
+    auto* const new_pc_lo = read_bus(c, int_const(c, VECTOR_BRK_LO));
+    auto* const new_pc_hi = read_bus(c, int_const(c, VECTOR_BRK_HI));
+    auto* const new_pc = assemble(c, new_pc_lo, new_pc_hi);
+
+    auto const next_pc = c.inst->pc + 2_w;
+    push(c, int_const(c, static_cast<byte_t>(next_pc >> 8)));
+    push(c, int_const(c, static_cast<byte_t>(next_pc)));
+    push(c, load_sr(c));
+
+    store_flag(c, FlagOffset::I, int_const(c, true));
+
+    add_cycle_counter(c, int_const<uint64_t>(c, 7));
+
+    return new_pc;
 }
 
 llvm::Value* NOP_impl(Context const& c)
@@ -1062,10 +1139,13 @@ auto* create_cpu_struct_type(llvm::LLVMContext& context)
 
 auto* create_jit_function_type(llvm::LLVMContext& context,
                                llvm::StructType* cpu_type,
-                               llvm::StructType* bus_type)
+                               llvm::StructType* bus_type,
+                               llvm::StructType* emu_type)
 {
     auto* fn_type = llvm::FunctionType::get(
-        int_type<uint64_t>(context), {cpu_type->getPointerTo(), bus_type->getPointerTo()}, false);
+        int_type<uint64_t>(context),
+        {cpu_type->getPointerTo(), bus_type->getPointerTo(), emu_type->getPointerTo()},
+        false);
     return fn_type;
 }
 
@@ -1082,6 +1162,14 @@ auto* create_bus_write_function_type(llvm::LLVMContext& context, llvm::StructTyp
         llvm::Type::getVoidTy(context),
         {bus_type->getPointerTo(), int_type<uint16_t>(context), int_type<uint8_t>(context)},
         false);
+    return fn_type;
+}
+
+auto* create_call_function_function_type(llvm::LLVMContext& context, llvm::StructType* emu_type)
+{
+    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
+                                            {emu_type->getPointerTo(), int_type<uint16_t>(context)},
+                                            false);
     return fn_type;
 }
 
@@ -1162,9 +1250,10 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
            == offsetof(decltype(CPU::SR), C));
 #endif // NDEBUG
 
-    auto* bus_struct = llvm::StructType::create(*context, "emu_Bus"); // Just declared
+    auto* bus_struct = llvm::StructType::create(*context, "emu_Bus");      // Just declared
+    auto* emu_struct = llvm::StructType::create(*context, "emu_Emulator"); // Just declared
 
-    auto* fn_type = create_jit_function_type(*context, cpu_struct, bus_struct);
+    auto* fn_type = create_jit_function_type(*context, cpu_struct, bus_struct, emu_struct);
     auto* fn = llvm::Function::Create(fn_type,
                                       llvm::Function::LinkageTypes::ExternalLinkage,
                                       fmt::format("fn_{:04x}", flow.begin()->first),
@@ -1179,6 +1268,13 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                                 llvm::Function::LinkageTypes::ExternalLinkage,
                                                 "write_bus",
                                                 module.get());
+
+    auto* call_function_fn_type = create_call_function_function_type(*context, bus_struct);
+    auto* call_function_fn = llvm::Function::Create(call_function_fn_type,
+                                                    llvm::Function::LinkageTypes::ExternalLinkage,
+                                                    "call_function",
+                                                    module.get());
+
     auto* add_fn = create_add_sub_fn(
         {
             .context = context,
@@ -1218,7 +1314,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         llvm::Value* last_result = nullptr;
         for (auto const& instruction : entry.second.instructions) {
             auto* const codegen_fn = instruction_table[static_cast<size_t>(instruction.bytes[0])];
-            last_result = codegen_fn({
+            Context ctx{
                 .inst = &instruction,
                 .context = context,
                 .builder = builder.get(),
@@ -1228,9 +1324,24 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                 .write_bus_fn = write_bus_fn,
                 .add_fn = add_fn,
                 .sub_fn = sub_fn,
+                .call_function_fn = call_function_fn,
                 .cycle_counter_ptr = cycle_counter,
-            });
+            };
+
+            last_result = codegen_fn(ctx);
+            auto const next_addr = instruction.get_pc() + word_t{instruction.length};
+
+            if (last_result != nullptr) {
+                store_pc(ctx, last_result);
+            } else {
+                store_pc(ctx, int_const(ctx, next_addr));
+            }
+
+            if (instruction.is_call()) {
+                make_function_call(ctx, last_result, next_addr);
+            }
         }
+
         if (entry.second.next_taken && entry.second.next_not_taken) {
             // Conditional branch
             auto* const taken_block = blocks.at(*entry.second.next_taken);
@@ -1245,16 +1356,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             auto* const taken_block = blocks.at(*entry.second.next_taken);
             builder->CreateBr(taken_block);
         } else {
-            // Termination block
+            // Termination block, return number of cycles
             auto* const cycles = builder->CreateLoad(int_type<uint64_t>(*context), cycle_counter);
-            assert(last_result != nullptr);
-            // Update PC
-            auto* p = builder->CreateGEP(
-                cpu_struct,
-                fn->getArg(0),
-                {int_const(*context, 0), int_const(*context, std::to_underlying(RegOffset::PC))});
-            builder->CreateStore(last_result, p);
-            // Return number of cycles
             builder->CreateRet(cycles);
         }
     }
@@ -1265,8 +1368,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     }
 
     // module->print(llvm::errs(), nullptr);
-    // optimize(*module, llvm::OptimizationLevel::O3);
-    // module->print(llvm::errs(), nullptr);
+    optimize(*module, llvm::OptimizationLevel::O3);
+    //  module->print(llvm::errs(), nullptr);
 
     return module;
 }

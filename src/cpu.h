@@ -79,8 +79,12 @@ class Bus {
 public:
     explicit Bus();
     void load_file(std::filesystem::path const& p, word_t address);
+
     byte_t read(word_t address) const;
     void write(word_t address, byte_t value);
+
+    byte_t read_memory(word_t address) const;
+    void write_memory(word_t address, byte_t value);
 
     std::vector<byte_t> memory_space;
 };

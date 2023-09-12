@@ -861,7 +861,7 @@ constinit std::array<inst_handler_t, 256> const instruction_table{
 #undef _
 
 #define _ ""
-constinit std::array<std::string_view, 256> const mnemonig_table{
+constexpr std::array<std::string_view, 256> mnemonig_table{
 //       -0     -1     -2     -3 -4     -5     -6     -7 -8     -9     -a    -b  -c     -d     -e     -f
 /* 0- */ "BRK", "ORA", _,     _, _,     "ORA", "ASL", _, "PHP", "ORA", "ASL", _, _,     "ORA", "ASL", _,
 /* 1- */ "BPL", "ORA", _,     _, _,     "ORA", "ASL", _, "CLC", "ORA", _,     _, _,     "ORA", "ASL", _,
@@ -882,9 +882,9 @@ constinit std::array<std::string_view, 256> const mnemonig_table{
 };
 #undef _
 #define _ 0
-constinit std::array<int, 256> const length_table{
+constexpr std::array<int, 256> length_table{
 //      -0 -1 -2 -3 -4 -5 -6 -7 -8 -9 -a -b -c -d -e -f
-/* 0- */ 1, 2, _, _, _, 2, 2, _, 1, 2, 1, _, _, 3, 3, _,
+/* 0- */ 2, 2, _, _, _, 2, 2, _, 1, 2, 1, _, _, 3, 3, _,
 /* 1- */ 2, 2, _, _, _, 2, 2, _, 1, 3, _, _, _, 3, 3, _,
 /* 2- */ 3, 2, _, _, 2, 2, 2, _, 1, 2, 1, _, 3, 3, 3, _,
 /* 3- */ 2, 2, _, _, _, 2, 2, _, 1, 3, _, _, _, 3, 3, _,
@@ -930,10 +930,10 @@ constinit std::array<diassemble_handler_t, 256> const disassemble_table{
 Instruction::Instruction(word_t pc_, Bus const& bus)
     : pc{pc_}
 {
-    bytes[0] = bus.read(pc);
+    bytes[0] = bus.read_memory(pc);
     length = length_table[static_cast<size_t>(bytes[0])];
     for (int i = 1; i < length; ++i) {
-        bytes[i] = bus.read(pc + byte_t{i});
+        bytes[i] = bus.read_memory(pc + byte_t{i});
     }
 }
 
@@ -997,11 +997,15 @@ std::optional<word_t> Instruction::get_taken_addr() const
     }
 }
 
+word_t Instruction::decode_abs_addr() const { return assemble(bytes[1], bytes[2]); }
+
 bool Instruction::is_valid() const
 {
     return !mnemonig_table[static_cast<size_t>(bytes[0])].empty();
 }
 
-bool Instruction::is_jsr() const { return pc == 0x20_w; }
+bool Instruction::is_jsr() const { return bytes[0] == 0x20_b; }
+bool Instruction::is_call() const { return bytes[0] == 0_b || is_jsr(); }
+bool Instruction::is_return() const { return bytes[0] == 0x40_b || bytes[0] == 0x60_b; }
 
 } // namespace emu::inst

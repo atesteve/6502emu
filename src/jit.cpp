@@ -1,5 +1,6 @@
 #include "jit.h"
 #include "cpu.h"
+#include "emulator.h"
 
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/JITSymbol.h>
@@ -19,6 +20,12 @@ extern "C" void write_bus(Bus* bus, uint16_t address, uint8_t value)
 {
     // Forward
     bus->write(word_t{address}, byte_t{value});
+}
+
+extern "C" uint64_t call_function(Emulator* em, uint16_t addr)
+{
+    // Forward
+    return em->call_function(word_t{addr});
 }
 
 } // namespace
@@ -42,6 +49,9 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> make_jit()
         {jit_ptr->mangleAndIntern("write_bus"),
          llvm::JITEvaluatedSymbol::fromPointer(
              write_bus, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
+        {jit_ptr->mangleAndIntern("call_function"),
+         llvm::JITEvaluatedSymbol::fromPointer(
+             call_function, llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported)},
     }));
 
     if (err) {

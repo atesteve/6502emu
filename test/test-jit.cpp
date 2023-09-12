@@ -1,6 +1,7 @@
 #include "../src/jit.h"
 #include "../src/codegen.h"
 #include "../src/control_flow.h"
+#include "../src/emulator.h"
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -72,14 +73,14 @@ protected:
             ret_instruction;
 
         // Set up stack
-        _bus.write(0x1ff_w, emu::get_hi(params.return_address));
-        _bus.write(0x1fe_w, emu::get_lo(params.return_address));
-
-        // Add SR to the stack if the return instruction is an RTI
         if (params.do_rti) {
+            _bus.write(0x1ff_w, emu::get_hi(params.return_address));
+            _bus.write(0x1fe_w, emu::get_lo(params.return_address));
             _bus.write(0x1fd_w, static_cast<emu::byte_t>(params.expected_cpu_state.SR));
             _cpu.SP = 0xfc_b;
         } else {
+            _bus.write(0x1ff_w, emu::get_hi(params.return_address - 1_w));
+            _bus.write(0x1fe_w, emu::get_lo(params.return_address - 1_w));
             _cpu.SP = 0xfd_b;
         }
     }
@@ -111,6 +112,7 @@ protected:
     std::unique_ptr<llvm::orc::LLJIT> _jit;
     emu::CPU _cpu{};
     emu::Bus _bus{};
+    emu::Emulator _em{};
 };
 
 TEST_P(TestJitCodegen, Test)
@@ -126,7 +128,7 @@ TEST_P(TestJitCodegen, Test)
     ASSERT_TRUE(test_expected(fn_ex));
     auto* const fn = fn_ex.get().toPtr<emu::jit_fn_t>();
 
-    auto const cycles = fn(_cpu, _bus);
+    auto const cycles = fn(_cpu, _bus, _em);
 
     EXPECT_EQ(cycles, params.expected_cycles + 6);
 

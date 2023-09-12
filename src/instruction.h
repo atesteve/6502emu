@@ -16,8 +16,11 @@ struct Instruction {
 
     std::optional<word_t> get_not_taken_addr() const;
     std::optional<word_t> get_taken_addr() const;
+    word_t decode_abs_addr() const;
     bool is_valid() const;
     bool is_jsr() const;
+    bool is_call() const;
+    bool is_return() const;
     word_t get_pc() const noexcept { return pc; }
 
     explicit Instruction(word_t pc, Bus const& bus);

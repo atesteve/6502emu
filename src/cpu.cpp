@@ -46,4 +46,11 @@ void Bus::write(word_t address, byte_t value)
     memory_space[static_cast<size_t>(address)] = value;
 }
 
+byte_t Bus::read_memory(word_t address) const { return memory_space[static_cast<size_t>(address)]; }
+
+void Bus::write_memory(word_t address, byte_t value)
+{
+    memory_space[static_cast<size_t>(address)] = value;
+}
+
 } // namespace emu

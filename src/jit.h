@@ -11,7 +11,9 @@
 
 namespace emu {
 
-using jit_fn_t = uint64_t (*)(CPU&, Bus&);
+class Emulator;
+
+using jit_fn_t = uint64_t (*)(CPU& cpu, Bus& bus, Emulator& em);
 
 llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> make_jit();
 llvm::Error materialize(llvm::orc::LLJIT& jit,
