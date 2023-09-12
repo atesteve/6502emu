@@ -186,7 +186,6 @@ addr_mode_result_t
 }
 
 bool is_negative(byte_t value) { return static_cast<int8_t>(value) < 0; }
-bool msb(byte_t value) { return is_negative(value); }
 
 void assign_accumulator(CPU& cpu, byte_t value)
 {
@@ -274,7 +273,6 @@ uint64_t add_op_dec(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_
 
     auto const result = result_lo | (result_hi << 4);
 
-    cpu.SR.V = msb(cpu.A) == msb(op) && msb(result) != msb(op);
     cpu.SR.C = carry_hi;
     assign_accumulator(cpu, result);
 
@@ -324,7 +322,6 @@ uint64_t sub_op_dec(Instruction const& inst, CPU& cpu, Bus& bus, addr_fn_t addr_
 
     auto const result = result_lo | (result_hi << 4);
 
-    cpu.SR.V = msb(cpu.A) == msb(op) && msb(result) != msb(op);
     cpu.SR.C = carry_hi;
     assign_accumulator(cpu, result);
 

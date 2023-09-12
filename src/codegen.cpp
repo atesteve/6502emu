@@ -1067,9 +1067,114 @@ void create_bin_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
     c.builder->CreateRetVoid();
 }
 
-void create_dec_add_fn(Context const& c, llvm::Value*, llvm::Value*) { c.builder->CreateRetVoid(); }
+void create_dec_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
+{
+    auto const lhs_lo = c.builder->CreateAnd(lhs, int_const(c, 0x0f_b));
+    auto const lhs_hi = c.builder->CreateLShr(lhs, 4);
 
-void create_dec_sub_fn(Context const& c, llvm::Value*, llvm::Value*) { c.builder->CreateRetVoid(); }
+    auto const rhs_lo = c.builder->CreateAnd(rhs, int_const(c, 0x0f_b));
+    auto const rhs_hi = c.builder->CreateLShr(rhs, 4);
+
+    auto const half_dec_add = [&](llvm::Value* a, llvm::Value* b, llvm::Value* c_bit) {
+        auto* const c_byte = c.builder->CreateZExt(c_bit, int_type<uint8_t>(c));
+        auto* const result_no_carry = c.builder->CreateAdd(a, b);
+        auto* const result_tmp = c.builder->CreateAdd(result_no_carry, c_byte);
+
+        auto* const carry_aloca = c.builder->CreateAlloca(int_type<bool>(c));
+        c.builder->CreateStore(int_const(c, false), carry_aloca);
+        auto* const result_aloca = c.builder->CreateAlloca(int_type<uint8_t>(c));
+        c.builder->CreateStore(result_tmp, result_aloca);
+
+        auto* const ge_10 = c.builder->CreateCmp(
+            llvm::CmpInst::Predicate::ICMP_UGE, result_tmp, int_const(c, 10_b));
+
+        auto* const block_ge_10 = llvm::BasicBlock::Create(*c.context, "", c.fn);
+        auto* const block_lt_10 = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+        c.builder->CreateCondBr(ge_10, block_ge_10, block_lt_10);
+
+        // If result >= 10_b
+        c.builder->SetInsertPoint(block_ge_10);
+        auto* const result_m10 = c.builder->CreateSub(result_tmp, int_const(c, 10_b));
+        c.builder->CreateStore(result_m10, result_aloca);
+        c.builder->CreateStore(int_const(c, true), carry_aloca);
+        c.builder->CreateBr(block_lt_10);
+
+        // If result < 10_b, just continue
+        c.builder->SetInsertPoint(block_lt_10);
+        auto* const carry = c.builder->CreateLoad(int_type<bool>(c), carry_aloca);
+        auto* const result = c.builder->CreateLoad(int_type<uint8_t>(c), result_aloca);
+        return std::make_pair(result, carry);
+    };
+
+    auto* const c_flag = load_flag(c, FlagOffset::C);
+    auto const [result_lo, carry_lo] = half_dec_add(lhs_lo, rhs_lo, c_flag);
+    auto const [result_hi, carry_hi] = half_dec_add(lhs_hi, rhs_hi, carry_lo);
+
+    auto* const result_hi_l = c.builder->CreateShl(result_hi, 4);
+    auto* const result = c.builder->CreateOr(result_lo, result_hi_l);
+
+    store_flag(c, FlagOffset::C, carry_hi);
+    set_n_z(c, result);
+    store_reg(c, RegOffset::A, result);
+
+    c.builder->CreateRetVoid();
+}
+
+void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
+{
+    auto const lhs_lo = c.builder->CreateAnd(lhs, int_const(c, 0x0f_b));
+    auto const lhs_hi = c.builder->CreateLShr(lhs, 4);
+
+    auto const rhs_lo = c.builder->CreateAnd(rhs, int_const(c, 0x0f_b));
+    auto const rhs_hi = c.builder->CreateLShr(rhs, 4);
+
+    auto const half_dec_sub = [&](llvm::Value* a, llvm::Value* b, llvm::Value* c_bit) {
+        auto* const c_bit_comp = c.builder->CreateNot(c_bit);
+        auto* const c_byte = c.builder->CreateZExt(c_bit_comp, int_type<uint8_t>(c));
+        auto* const result_no_carry = c.builder->CreateSub(a, b);
+        auto* const result_tmp = c.builder->CreateSub(result_no_carry, c_byte);
+
+        auto* const carry_aloca = c.builder->CreateAlloca(int_type<bool>(c));
+        c.builder->CreateStore(int_const(c, true), carry_aloca);
+        auto* const result_aloca = c.builder->CreateAlloca(int_type<uint8_t>(c));
+        c.builder->CreateStore(result_tmp, result_aloca);
+
+        auto* const ge_10 = c.builder->CreateCmp(
+            llvm::CmpInst::Predicate::ICMP_UGE, result_tmp, int_const(c, 10_b));
+
+        auto* const block_ge_10 = llvm::BasicBlock::Create(*c.context, "", c.fn);
+        auto* const block_lt_10 = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+        c.builder->CreateCondBr(ge_10, block_ge_10, block_lt_10);
+
+        // If result >= 10_b
+        c.builder->SetInsertPoint(block_ge_10);
+        auto* const result_p10 = c.builder->CreateAdd(result_tmp, int_const(c, 10_b));
+        c.builder->CreateStore(result_p10, result_aloca);
+        c.builder->CreateStore(int_const(c, false), carry_aloca);
+        c.builder->CreateBr(block_lt_10);
+
+        // If result < 10_b, just continue
+        c.builder->SetInsertPoint(block_lt_10);
+        auto* const carry = c.builder->CreateLoad(int_type<bool>(c), carry_aloca);
+        auto* const result = c.builder->CreateLoad(int_type<uint8_t>(c), result_aloca);
+        return std::make_pair(result, carry);
+    };
+
+    auto* const c_flag = load_flag(c, FlagOffset::C);
+    auto const [result_lo, carry_lo] = half_dec_sub(lhs_lo, rhs_lo, c_flag);
+    auto const [result_hi, carry_hi] = half_dec_sub(lhs_hi, rhs_hi, carry_lo);
+
+    auto* const result_hi_l = c.builder->CreateShl(result_hi, 4);
+    auto* const result = c.builder->CreateOr(result_lo, result_hi_l);
+
+    store_flag(c, FlagOffset::C, carry_hi);
+    set_n_z(c, result);
+    store_reg(c, RegOffset::A, result);
+
+    c.builder->CreateRetVoid();
+}
 
 auto* create_add_sub_fn(Context const& c, bool add)
 {
@@ -1369,7 +1474,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
     // module->print(llvm::errs(), nullptr);
     optimize(*module, llvm::OptimizationLevel::O3);
-    //  module->print(llvm::errs(), nullptr);
+    // module->print(llvm::errs(), nullptr);
 
     return module;
 }

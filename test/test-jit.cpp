@@ -574,6 +574,7 @@ static std::vector<ParamType> get_test_cases()
     #define N .N=true
     #define C .C=true
     #define V .V=true
+    #define D .D=true
 
     add_group_one_tests("AND", "no flags", and_opcodes, 0xfc_b, 0x3f_b, 0x3c_b);
     add_group_one_tests("AND", "Z flag",   and_opcodes, 0x55_b, 0xaa_b, 0x00_b, {}, {Z});
@@ -599,6 +600,16 @@ static std::vector<ParamType> get_test_cases()
     add_group_one_tests("ADC", "positive ovf",    adc_opcodes, 0x75_b, 0x56_b, 0xcb_b, {},  {N, V});
     add_group_one_tests("ADC", "negative ovf",    adc_opcodes, 0x8b_b, 0xaa_b, 0x35_b, {},  {V, C});
 
+    add_group_one_tests("ADC-dec", "no carry",            adc_opcodes, 0x12_b, 0x34_b, 0x46_b, {D},    {D});
+    add_group_one_tests("ADC-dec", "bcd carry",           adc_opcodes, 0x19_b, 0x05_b, 0x24_b, {D},    {D});
+    add_group_one_tests("ADC-dec", "carry in",            adc_opcodes, 0x12_b, 0x34_b, 0x47_b, {D, C}, {D});
+    add_group_one_tests("ADC-dec", "carry in, bcd carry", adc_opcodes, 0x19_b, 0x05_b, 0x25_b, {D, C}, {D});
+    add_group_one_tests("ADC-dec", "carry out",           adc_opcodes, 0x84_b, 0x17_b, 0x01_b, {D},    {D, C});
+    add_group_one_tests("ADC-dec", "carry in/out",        adc_opcodes, 0x84_b, 0x16_b, 0x01_b, {D, C}, {D, C});
+    add_group_one_tests("ADC-dec", "zero",                adc_opcodes, 0x00_b, 0x00_b, 0x00_b, {D},    {D, Z});
+    add_group_one_tests("ADC-dec", "zero, carry out",     adc_opcodes, 0x84_b, 0x16_b, 0x00_b, {D},    {D, Z, C});
+    add_group_one_tests("ADC-dec", "zero, carry in/out",  adc_opcodes, 0x84_b, 0x15_b, 0x00_b, {D, C}, {D, Z, C});
+
     add_group_one_tests("SBC", "no borrow",     sbc_opcodes, 0x34_b, 0x12_b, 0x22_b, {C}, {C});
     add_group_one_tests("SBC", "borrow in",     sbc_opcodes, 0x34_b, 0x12_b, 0x21_b, {},  {C});
     add_group_one_tests("SBC", "borrow out",    sbc_opcodes, 0x66_b, 0x67_b, 0xff_b, {C}, {N});
@@ -606,6 +617,12 @@ static std::vector<ParamType> get_test_cases()
     add_group_one_tests("SBC", "borrow, zero",  sbc_opcodes, 0xaa_b, 0xa9_b, 0x00_b, {},  {Z, C});
     add_group_one_tests("SBC", "positive ovf",  sbc_opcodes, 0x7f_b, 0xff_b, 0x80_b, {C}, {N, V});
     add_group_one_tests("SBC", "negative ovf",  sbc_opcodes, 0x81_b, 0x01_b, 0x7f_b, {},  {V, C});
+
+    add_group_one_tests("SBC-dec", "no borrow",             sbc_opcodes, 0x34_b, 0x12_b, 0x22_b, {D, C}, {D, C});
+    add_group_one_tests("SBC-dec", "bcd borrow",            sbc_opcodes, 0x22_b, 0x16_b, 0x06_b, {D, C}, {D, C});
+    add_group_one_tests("SBC-dec", "borrow in",             sbc_opcodes, 0x34_b, 0x12_b, 0x21_b, {D},  {D, C});
+    add_group_one_tests("SBC-dec", "borrow in, bcd borrow", sbc_opcodes, 0x22_b, 0x16_b, 0x05_b, {D}, {D, C});
+    add_group_one_tests("SBC-dec", "borrow out",            sbc_opcodes, 0x22_b, 0x46_b, 0x76_b, {D, C}, {D});
 
     add_cond_branch_inst_tests("BCC", 0x90_b, {},  {C});
     add_cond_branch_inst_tests("BCS", 0xb0_b, {C}, {});
@@ -664,6 +681,7 @@ static std::vector<ParamType> get_test_cases()
     #undef N
     #undef C
     #undef V
+    #undef D
     // clanf-format on
 
     return ret;

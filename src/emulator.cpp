@@ -94,7 +94,6 @@ JitFn* Emulator::get_jit_fn(word_t addr)
 
 uint64_t Emulator::call_function(word_t addr)
 {
-    SPDLOG_DEBUG("Calling fn {:04x}", addr);
     uint64_t ret = 0;
     auto* jit_fn = get_jit_fn(addr);
 
