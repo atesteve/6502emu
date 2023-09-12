@@ -128,7 +128,7 @@ TEST_P(TestJitCodegen, Test)
     ASSERT_TRUE(test_expected(fn_ex));
     auto* const fn = fn_ex.get().toPtr<emu::jit_fn_t>();
 
-    auto const cycles = fn(_cpu, _bus, _em);
+    auto const cycles = fn(_cpu, _bus, _bus.memory_space.data(), _em);
 
     EXPECT_EQ(cycles, params.expected_cycles + 6);
 

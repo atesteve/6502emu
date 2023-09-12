@@ -8,6 +8,8 @@ include(CTest)
 enable_testing()
 
 add_compile_options(-Wall -Wextra -pedantic)
+#add_compile_options(-pg -g)
+#add_link_options(-pg -g)
 
 set(SOURCES
     src/instruction.cpp

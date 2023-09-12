@@ -93,7 +93,7 @@ uint64_t Emulator::call_function(word_t addr)
 {
     auto const cache_fn = _jit_functions_cache.find(addr);
     if (cache_fn != _jit_functions_cache.end()) {
-        auto const ret = cache_fn->second(_cpu, _bus, *this);
+        auto const ret = cache_fn->second(_cpu, _bus, _bus.memory_space.data(), *this);
         _jit_clock_counter += ret;
         return ret;
     }
@@ -111,7 +111,7 @@ uint64_t Emulator::call_function(word_t addr)
             return run();
         } else {
             _jit_functions_cache.emplace(addr, fn);
-            auto const ret = fn(_cpu, _bus, *this);
+            auto const ret = fn(_cpu, _bus, _bus.memory_space.data(), *this);
             _jit_clock_counter += ret;
             return ret;
         }

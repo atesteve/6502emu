@@ -184,19 +184,70 @@ void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
 
 auto* read_bus(Context const& c, llvm::Value* addr)
 {
+    auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
+    auto* const eq_0 =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
+    auto* const ret = c.builder->CreateAlloca(int_type<uint8_t>(c));
+
+    auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+    c.builder->CreateCondBr(eq_0, regular_memory_block, mapped_memory_block);
+
+    // If regular memory, just read from memory
+    c.builder->SetInsertPoint(regular_memory_block);
+    auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
+                                         c.fn->getArg(2),
+                                         {int_const(c, 0), addr});
+    auto* const value_read = c.builder->CreateLoad(int_type<uint8_t>(c), p);
+    c.builder->CreateStore(value_read, ret);
+    c.builder->CreateBr(continue_block);
+
+    // If mapped memory, perform a call to the bus object
+    c.builder->SetInsertPoint(mapped_memory_block);
     auto* const call = c.builder->CreateCall(
         c.read_bus_fn->getFunctionType(), c.read_bus_fn, {c.fn->getArg(1), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-    return call;
+    c.builder->CreateStore(call, ret);
+    c.builder->CreateBr(continue_block);
+
+    // Load produced value and continue
+    c.builder->SetInsertPoint(continue_block);
+    return c.builder->CreateLoad(int_type<uint8_t>(c), ret);
 }
 
 void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
 {
+    auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
+    auto* const eq_0 =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
+
+    auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+    c.builder->CreateCondBr(eq_0, regular_memory_block, mapped_memory_block);
+
+    // If regular memory, just write to memory
+    c.builder->SetInsertPoint(regular_memory_block);
+    auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
+                                         c.fn->getArg(2),
+                                         {int_const(c, 0), addr});
+    c.builder->CreateStore(value, p);
+    c.builder->CreateBr(continue_block);
+
+    // If mapped memory, perform a call to the bus object
+    c.builder->SetInsertPoint(mapped_memory_block);
     auto* const call = c.builder->CreateCall(
         c.write_bus_fn->getFunctionType(), c.write_bus_fn, {c.fn->getArg(1), addr, value});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+    c.builder->CreateBr(continue_block);
+
+    // And just continue
+    c.builder->SetInsertPoint(continue_block);
 }
 
 void add_cycle_counter(Context const& c, llvm::Value* value);
@@ -204,7 +255,7 @@ void add_cycle_counter(Context const& c, llvm::Value* value);
 void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 {
     c.builder->CreateCall(
-        c.call_function_fn->getFunctionType(), c.call_function_fn, {c.fn->getArg(2), addr});
+        c.call_function_fn->getFunctionType(), c.call_function_fn, {c.fn->getArg(3), addr});
 
     // add_cycle_counter(c, result);
 
@@ -1251,10 +1302,12 @@ auto* create_jit_function_type(llvm::LLVMContext& context,
                                llvm::StructType* bus_type,
                                llvm::StructType* emu_type)
 {
-    auto* fn_type = llvm::FunctionType::get(
-        int_type<uint64_t>(context),
-        {cpu_type->getPointerTo(), bus_type->getPointerTo(), emu_type->getPointerTo()},
-        false);
+    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
+                                            {cpu_type->getPointerTo(),
+                                             bus_type->getPointerTo(),
+                                             int_type<uint8_t>(context)->getPointerTo(),
+                                             emu_type->getPointerTo()},
+                                            false);
     return fn_type;
 }
 
