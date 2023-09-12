@@ -203,10 +203,10 @@ void add_cycle_counter(Context const& c, llvm::Value* value);
 
 void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 {
-    auto* const result = c.builder->CreateCall(
+    c.builder->CreateCall(
         c.call_function_fn->getFunctionType(), c.call_function_fn, {c.fn->getArg(2), addr});
 
-    add_cycle_counter(c, result);
+    // add_cycle_counter(c, result);
 
     // After the function call returns, we need to make sure that the PC points to the correct
     // location and so it is safe to continue
@@ -233,9 +233,13 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     c.builder->SetInsertPoint(block_eq);
 }
 
-auto* decode_addr_abs(Context const& c)
+auto* read_1_byte_opcode(Context const& c) { return read_bus(c, int_const(c, c.inst->pc + 1_w)); }
+
+auto* read_2_byte_opcode(Context const& c)
 {
-    return int_const(c, assemble(c.inst->bytes[1], c.inst->bytes[2]));
+    auto* const result_lo = read_bus(c, int_const(c, c.inst->pc + 1_w));
+    auto* const result_hi = read_bus(c, int_const(c, c.inst->pc + 2_w));
+    return assemble(c, result_lo, result_hi);
 }
 
 auto* same_page(Context const& c, llvm::Value* addr_1, llvm::Value* addr_2)
@@ -251,14 +255,14 @@ addr_mode_result_t addr_imm(Context const& c, bool, bool)
 {
     return {
         .addr = nullptr,
-        .op = int_const(c, c.inst->bytes[1]),
+        .op = read_1_byte_opcode(c),
         .cycles = int_const<uint64_t>(c, 1),
     };
 }
 
 addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
 {
-    auto* const addr = decode_addr_abs(c);
+    auto* const addr = read_2_byte_opcode(c);
     auto* const op = dereference ? read_bus(c, addr) : nullptr;
 
     return {
@@ -270,7 +274,7 @@ addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
 
 addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_extra_cycle)
 {
-    auto* const base_addr = decode_addr_abs(c);
+    auto* const base_addr = read_2_byte_opcode(c);
     auto* const x_reg = load_reg(c, RegOffset::X);
     auto* const x_reg_16 = c.builder->CreateZExt(x_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, x_reg_16);
@@ -299,7 +303,7 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
 
 addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
-    auto* const base_addr = decode_addr_abs(c);
+    auto* const base_addr = read_2_byte_opcode(c);
     auto* const y_reg = load_reg(c, RegOffset::Y);
     auto* const y_reg_16 = c.builder->CreateZExt(y_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg_16);
@@ -328,7 +332,7 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_ext
 
 addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
 {
-    auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
+    auto* const zero_page_base = read_1_byte_opcode(c);
     auto* const x_reg = load_reg(c, RegOffset::X);
     auto* const zero_page_addr = c.builder->CreateAdd(zero_page_base, x_reg);
     auto* const zero_page_addr_p1 = c.builder->CreateAdd(zero_page_addr, int_const(c, 1_b));
@@ -349,7 +353,7 @@ addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
 
 addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
-    auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
+    auto* const zero_page_base = read_1_byte_opcode(c);
     auto* const zero_page_base_16 = c.builder->CreateZExt(zero_page_base, int_type<uint16_t>(c));
     auto* const zero_page_base_16_p1 = c.builder->CreateAdd(zero_page_base_16, int_const(c, 1_w));
 
@@ -384,7 +388,7 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
 
 addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 {
-    auto* const addr = int_const(c, static_cast<uint16_t>(c.inst->bytes[1]));
+    auto* const addr = c.builder->CreateZExt(read_1_byte_opcode(c), int_type<uint16_t>(c));
     auto* const op = dereference ? read_bus(c, addr) : nullptr;
     return {
         .addr = addr,
@@ -395,7 +399,7 @@ addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 
 addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
 {
-    auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
+    auto* const zero_page_base = read_1_byte_opcode(c);
     auto* const x_reg = load_reg(c, RegOffset::X);
     auto* const addr = c.builder->CreateAdd(zero_page_base, x_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
@@ -409,7 +413,7 @@ addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
 
 addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference, bool)
 {
-    auto* const zero_page_base = int_const(c, c.inst->bytes[1]);
+    auto* const zero_page_base = read_1_byte_opcode(c);
     auto* const y_reg = load_reg(c, RegOffset::Y);
     auto* const addr = c.builder->CreateAdd(zero_page_base, y_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
@@ -963,7 +967,7 @@ llvm::Value* JMP_abs(Context const& c)
 
 llvm::Value* JMP_ind(Context const& c)
 {
-    auto* const addr = decode_addr_abs(c);
+    auto* const addr = read_2_byte_opcode(c);
     auto* const addr_p1 = c.builder->CreateAdd(addr, int_const(c, 1_w));
     auto* const new_pc_lo = read_bus(c, addr);
     auto* const new_pc_hi = read_bus(c, addr_p1);
@@ -974,7 +978,7 @@ llvm::Value* JMP_ind(Context const& c)
 
 llvm::Value* JSR_abs(Context const& c)
 {
-    auto* const new_pc = decode_addr_abs(c);
+    auto* const new_pc = read_2_byte_opcode(c);
 
     auto const next_pc = c.inst->pc + 2_w;
     push(c, int_const(c, static_cast<byte_t>(next_pc >> 8)));

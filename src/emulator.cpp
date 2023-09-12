@@ -2,7 +2,6 @@
 #include "instruction.h"
 #include "control_flow.h"
 #include "codegen.h"
-#include "jit.h"
 
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -31,18 +30,16 @@ uint64_t Emulator::run()
         counter += inst.run(_cpu, _bus);
         if (inst.is_call()) {
             auto const next_pc = inst.pc + word_t{inst.length};
-            counter += call_function(_cpu.PC);
+            call_function(_cpu.PC);
             if (_cpu.PC != next_pc) {
+                _intr_clock_counter += counter;
                 return counter;
             }
         } else if (inst.is_return()) {
+            _intr_clock_counter += counter;
             return counter;
         }
     }
-    inst::Instruction const inst{_cpu.PC, _bus};
-    SPDLOG_DEBUG("{}", inst.disassemble());
-    _clock_counter += inst.run(_cpu, _bus);
-    return 0;
 }
 
 struct JitFn {
@@ -94,24 +91,31 @@ JitFn* Emulator::get_jit_fn(word_t addr)
 
 uint64_t Emulator::call_function(word_t addr)
 {
-    uint64_t ret = 0;
+    auto const cache_fn = _jit_functions_cache.find(addr);
+    if (cache_fn != _jit_functions_cache.end()) {
+        auto const ret = cache_fn->second(_cpu, _bus, *this);
+        _jit_clock_counter += ret;
+        return ret;
+    }
+
     auto* jit_fn = get_jit_fn(addr);
 
     if (jit_fn == nullptr) {
         _thread_pool->async([this, addr] { jit_function(addr); });
         // Run interpreter while the function is being compiled
-        ret = run();
+        return run();
     } else {
         jit_fn_t fn = jit_fn->fn;
 
         if (!fn) {
-            ret = run();
+            return run();
         } else {
-            ret = fn(_cpu, _bus, *this);
+            _jit_functions_cache.emplace(addr, fn);
+            auto const ret = fn(_cpu, _bus, *this);
+            _jit_clock_counter += ret;
+            return ret;
         }
     }
-
-    return ret;
 }
 
 void Emulator::initialize(std::string_view image_file, word_t load_address, word_t entry_point)

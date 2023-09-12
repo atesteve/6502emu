@@ -84,7 +84,7 @@ int main(int argc, char** argv)
     auto const end = std::chrono::steady_clock::now();
 
     spdlog::info("Total instructions: {}", instruction_count);
-    spdlog::info("Total cycles: {}", emulator.get_clock_counter());
+    // spdlog::info("Total cycles: {}", emulator.get_clock_counter());
     spdlog::info("Real time: {}",
                  std::chrono::duration_cast<std::chrono::milliseconds>(end - start));
 }

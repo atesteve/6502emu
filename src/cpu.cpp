@@ -1,8 +1,12 @@
 #include "cpu.h"
 
+#include <spdlog/spdlog.h>
+#include <fmt/chrono.h>
+
 #include <fstream>
 #include <algorithm>
 #include <iostream>
+#include <chrono>
 
 namespace emu {
 
@@ -32,7 +36,12 @@ void Bus::load_file(std::filesystem::path const& p, word_t address)
 byte_t Bus::read(word_t address) const
 {
     if (address == 0xf004_w) {
-        return byte_t{std::cin.get()};
+        static std::chrono::steady_clock::time_point prev{};
+        auto const diff = std::chrono::steady_clock::now() - prev;
+        spdlog::info("Time: {}", std::chrono::duration_cast<std::chrono::milliseconds>(diff));
+        byte_t const ret{std::cin.get()};
+        prev = std::chrono::steady_clock::now();
+        return ret;
     }
     return memory_space[static_cast<size_t>(address)];
 }
