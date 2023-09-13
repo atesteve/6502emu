@@ -1493,13 +1493,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             last_result = codegen_fn(ctx);
             auto const next_addr = instruction.get_pc() + word_t{instruction.length};
 
-            if (last_result != nullptr) {
-                store_pc(ctx, last_result);
-            } else {
-                store_pc(ctx, int_const(ctx, next_addr));
-            }
-
             if (instruction.is_call()) {
+                store_pc(ctx, last_result);
                 make_function_call(ctx, last_result, next_addr);
             }
         }
@@ -1519,6 +1514,9 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             builder->CreateBr(taken_block);
         } else {
             // Termination block, return number of cycles
+            store_pc(
+                {.context = context, .builder = builder.get(), .cpu_type = cpu_struct, .fn = fn},
+                last_result);
             auto* const cycles = builder->CreateLoad(int_type<uint64_t>(*context), cycle_counter);
             builder->CreateRet(cycles);
         }
