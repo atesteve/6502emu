@@ -102,7 +102,7 @@ void Emulator::jit_function(word_t addr)
     jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
-    // emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O3);
+    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O3);
     auto const finish_optimize = std::chrono::steady_clock::now();
 
     exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));

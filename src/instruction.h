@@ -22,6 +22,7 @@ struct Instruction {
     bool is_call() const;
     bool is_return() const;
     bool is_indirect_jump() const;
+    uint32_t get_32bit_representation() const;
     word_t get_pc() const noexcept { return pc; }
 
     explicit Instruction(word_t pc, Bus const& bus);

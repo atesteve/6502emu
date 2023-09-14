@@ -29,6 +29,7 @@
 #include <array>
 #include <type_traits>
 #include <functional>
+#include <bit>
 
 using namespace emu::literals;
 
@@ -123,6 +124,31 @@ llvm::ConstantInt* int_const(Context const& c, Int value)
     return int_const<Int>(*c.context, value);
 }
 
+template<typename Int>
+void expect(Context const& c, llvm::Value* value, Int expected_value)
+{
+    c.builder->CreateIntrinsic(
+        llvm::Intrinsic::expect, {int_type<Int>(c)}, {value, int_const<Int>(c, expected_value)});
+}
+
+template<typename Int>
+llvm::Value* load(Context const& c, llvm::Value* ptr)
+{
+    return c.builder->CreateAlignedLoad(int_type<Int>(c), ptr, llvm::Align::Of<Int>());
+}
+
+template<typename Int>
+void store(Context const& c, llvm::Value* value, llvm::Value* ptr)
+{
+    c.builder->CreateAlignedStore(value, ptr, llvm::Align::Of<Int>());
+}
+
+template<typename Int>
+llvm::Value* unaligned_load(Context const& c, llvm::Value* ptr)
+{
+    return c.builder->CreateLoad(int_type<Int>(c), ptr);
+}
+
 llvm::Value* assemble(Context const& c, llvm::Value* lo, llvm::Value* hi)
 {
     auto* const lo_16 = c.builder->CreateZExt(lo, int_type<uint16_t>(c));
@@ -135,23 +161,23 @@ auto* load_reg(Context const& c, RegOffset offset)
 {
     auto* p = c.builder->CreateGEP(
         c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
-    return c.builder->CreateLoad(int_type<uint8_t>(c), p);
+    return load<uint8_t>(c, p);
 }
 
 void store_reg(Context const& c, RegOffset offset, llvm::Value* value)
 {
     auto* p = c.builder->CreateGEP(
         c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
-    c.builder->CreateStore(value, p);
+    store<uint8_t>(c, value, p);
 }
 
-void store_pc(Context const& c, llvm::Value* addr)
+void store_pc(Context const& c, llvm::Value* value)
 {
     auto* p =
         c.builder->CreateGEP(c.cpu_type,
                              c.fn->getArg(0),
                              {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
-    c.builder->CreateStore(addr, p);
+    store<uint16_t>(c, value, p);
 }
 
 llvm::Value* load_pc(Context const& c)
@@ -160,7 +186,7 @@ llvm::Value* load_pc(Context const& c)
         c.builder->CreateGEP(c.cpu_type,
                              c.fn->getArg(0),
                              {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
-    return c.builder->CreateLoad(int_type<uint16_t>(c), p);
+    return load<uint16_t>(c, p);
 }
 
 auto* load_flag(Context const& c, FlagOffset offset)
@@ -170,7 +196,7 @@ auto* load_flag(Context const& c, FlagOffset offset)
                                    {int_const(c, 0),
                                     int_const(c, std::to_underlying(RegOffset::SR)),
                                     int_const(c, std::to_underlying(offset))});
-    return c.builder->CreateLoad(int_type<bool>(c), p);
+    return load<bool>(c, p);
 }
 
 void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
@@ -180,7 +206,15 @@ void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
                                    {int_const(c, 0),
                                     int_const(c, std::to_underlying(RegOffset::SR)),
                                     int_const(c, std::to_underlying(offset))});
-    c.builder->CreateStore(value, p);
+    store<bool>(c, value, p);
+}
+
+void return_function(Context const& c, llvm::Value* pc_value)
+{
+    store_pc(c, pc_value);
+    auto* const cycles = c.builder->CreateAlignedLoad(
+        int_type<uint64_t>(c), c.cycle_counter_ptr, llvm::Align::Of<uint64_t>());
+    c.builder->CreateRet(cycles);
 }
 
 auto* read_bus(Context const& c, llvm::Value* addr)
@@ -188,6 +222,7 @@ auto* read_bus(Context const& c, llvm::Value* addr)
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
+    expect(c, eq_0, true);
 
     auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
@@ -200,8 +235,8 @@ auto* read_bus(Context const& c, llvm::Value* addr)
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                          c.fn->getArg(2),
                                          {int_const(c, 0), addr});
-    auto* const value_read = c.builder->CreateLoad(int_type<uint8_t>(c), p);
-    c.builder->CreateStore(value_read, c.aux_8b_ptr);
+    auto* const value_read = load<uint8_t>(c, p);
+    store<uint8_t>(c, value_read, c.aux_8b_ptr);
     c.builder->CreateBr(continue_block);
 
     // If mapped memory, perform a call to the bus object
@@ -210,12 +245,12 @@ auto* read_bus(Context const& c, llvm::Value* addr)
         c.read_bus_fn->getFunctionType(), c.read_bus_fn, {c.fn->getArg(1), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-    c.builder->CreateStore(call, c.aux_8b_ptr);
+    store<uint8_t>(c, call, c.aux_8b_ptr);
     c.builder->CreateBr(continue_block);
 
     // Load produced value and continue
     c.builder->SetInsertPoint(continue_block);
-    return c.builder->CreateLoad(int_type<uint8_t>(c), c.aux_8b_ptr);
+    return load<uint8_t>(c, c.aux_8b_ptr);
 }
 
 void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
@@ -223,6 +258,7 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
+    expect(c, eq_0, true);
 
     auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
@@ -235,7 +271,7 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                          c.fn->getArg(2),
                                          {int_const(c, 0), addr});
-    c.builder->CreateStore(value, p);
+    store<uint8_t>(c, value, p);
     c.builder->CreateBr(continue_block);
 
     // If mapped memory, perform a call to the bus object
@@ -264,9 +300,8 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     auto* const current_pc = load_pc(c);
     auto* const eq = c.builder->CreateCmp(
         llvm::CmpInst::Predicate::ICMP_EQ, current_pc, int_const(c, next_addr));
-
-    c.builder->CreateIntrinsic(
-        llvm::Intrinsic::expect, {int_type<bool>(c)}, {eq, int_const(c, true)});
+    // Hint the optimizer that the most common outcome is that the PC is correct.
+    expect(c, eq, true);
 
     auto* const block_eq =
         llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_eq", next_addr), c.fn);
@@ -277,7 +312,7 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 
     // If the PC after return does not match the expected PC, return
     c.builder->SetInsertPoint(block_ne);
-    auto* const cycles = c.builder->CreateLoad(int_type<uint64_t>(c), c.cycle_counter_ptr);
+    auto* const cycles = load<uint64_t>(c, c.cycle_counter_ptr);
     c.builder->CreateRet(cycles);
 
     // Otherwise, just continue
@@ -493,9 +528,9 @@ void set_n_z(Context const& c, llvm::Value* value)
 
 void add_cycle_counter(Context const& c, llvm::Value* value)
 {
-    auto* const counter = c.builder->CreateLoad(int_type<uint64_t>(c), c.cycle_counter_ptr);
+    auto* const counter = load<uint64_t>(c, c.cycle_counter_ptr);
     auto* const new_counter = c.builder->CreateAdd(counter, value);
-    c.builder->CreateStore(new_counter, c.cycle_counter_ptr);
+    store<uint64_t>(c, new_counter, c.cycle_counter_ptr);
 }
 
 using addr_fn_t = addr_mode_result_t (*)(Context const& c,
@@ -664,6 +699,7 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
         cycles = c.builder->CreateAdd(cycles_base, add_cycles);
     }
 
+    store_pc(c, int_const(c, c.inst->pc));
     add_cycle_counter(c, cycles);
 
     return test_result;
@@ -1086,6 +1122,30 @@ constinit std::array<inst_codegen_t, 256> const instruction_table{
 /* f- */ BEQ_rel,  SBC_ind_Y, _,        _, _,         SBC_zpg_X, INC_zpg_X, _, SED_impl, SBC_abs_Y, _,        _, _,         SBC_abs_X, INC_abs_X, _,
 };
 #undef _
+#define _ 0
+// The table below only works in little-endian systems
+static_assert(std::endian::native == std::endian::little,
+              "Big or mixed endian architectures not supported yet");
+constinit std::array<uint32_t, 256> const self_mod_table{
+//       -0      -1    -2    -3 -4    -5    -6    -7 -8    -9    -a    -b -c    -d    -e    -f
+/* 0- */ 0xff,   0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, 0xff, _, _,    0xff, 0xff, _,
+/* 1- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+/* 2- */ 0xff,   0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* 3- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+/* 4- */ 0xff,   0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* 5- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+/* 6- */ 0xff,   0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* 7- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+/* 8- */ _,      0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, _,    0xff, _, 0xff, 0xff, 0xff, _,
+/* 9- */ 0xffff, 0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, _,    0xff, _,    _,
+/* a- */ 0xff,   0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* b- */ 0xffff, 0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* c- */ 0xff,   0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* d- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+/* e- */ 0xff,   0xff, _,    _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _, 0xff, 0xff, 0xff, _,
+/* f- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
+};
+#undef _
 // clang-format on
 
 void create_bin_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
@@ -1136,9 +1196,9 @@ void create_dec_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         auto* const result_tmp = c.builder->CreateAdd(result_no_carry, c_byte);
 
         auto* const carry_aloca = c.builder->CreateAlloca(int_type<bool>(c));
-        c.builder->CreateStore(int_const(c, false), carry_aloca);
+        store<bool>(c, int_const(c, false), carry_aloca);
         auto* const result_aloca = c.builder->CreateAlloca(int_type<uint8_t>(c));
-        c.builder->CreateStore(result_tmp, result_aloca);
+        store<uint8_t>(c, result_tmp, result_aloca);
 
         auto* const ge_10 = c.builder->CreateCmp(
             llvm::CmpInst::Predicate::ICMP_UGE, result_tmp, int_const(c, 10_b));
@@ -1151,14 +1211,14 @@ void create_dec_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         // If result >= 10_b
         c.builder->SetInsertPoint(block_ge_10);
         auto* const result_m10 = c.builder->CreateSub(result_tmp, int_const(c, 10_b));
-        c.builder->CreateStore(result_m10, result_aloca);
-        c.builder->CreateStore(int_const(c, true), carry_aloca);
+        store<uint8_t>(c, result_m10, result_aloca);
+        store<bool>(c, int_const(c, true), carry_aloca);
         c.builder->CreateBr(block_lt_10);
 
         // If result < 10_b, just continue
         c.builder->SetInsertPoint(block_lt_10);
-        auto* const carry = c.builder->CreateLoad(int_type<bool>(c), carry_aloca);
-        auto* const result = c.builder->CreateLoad(int_type<uint8_t>(c), result_aloca);
+        auto* const carry = load<bool>(c, carry_aloca);
+        auto* const result = load<uint8_t>(c, result_aloca);
         return std::make_pair(result, carry);
     };
 
@@ -1191,9 +1251,9 @@ void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         auto* const result_tmp = c.builder->CreateSub(result_no_carry, c_byte);
 
         auto* const carry_aloca = c.builder->CreateAlloca(int_type<bool>(c));
-        c.builder->CreateStore(int_const(c, true), carry_aloca);
+        store<bool>(c, int_const(c, true), carry_aloca);
         auto* const result_aloca = c.builder->CreateAlloca(int_type<uint8_t>(c));
-        c.builder->CreateStore(result_tmp, result_aloca);
+        store<uint8_t>(c, result_tmp, result_aloca);
 
         auto* const ge_10 = c.builder->CreateCmp(
             llvm::CmpInst::Predicate::ICMP_UGE, result_tmp, int_const(c, 10_b));
@@ -1206,14 +1266,16 @@ void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         // If result >= 10_b
         c.builder->SetInsertPoint(block_ge_10);
         auto* const result_p10 = c.builder->CreateAdd(result_tmp, int_const(c, 10_b));
-        c.builder->CreateStore(result_p10, result_aloca);
-        c.builder->CreateStore(int_const(c, false), carry_aloca);
+        store<uint8_t>(c, result_p10, result_aloca);
+        store<bool>(c, int_const(c, false), carry_aloca);
         c.builder->CreateBr(block_lt_10);
 
         // If result < 10_b, just continue
         c.builder->SetInsertPoint(block_lt_10);
-        auto* const carry = c.builder->CreateLoad(int_type<bool>(c), carry_aloca);
-        auto* const result = c.builder->CreateLoad(int_type<uint8_t>(c), result_aloca);
+        auto* const carry =
+            c.builder->CreateAlignedLoad(int_type<bool>(c), carry_aloca, llvm::Align::Of<bool>());
+        auto* const result = c.builder->CreateAlignedLoad(
+            int_type<uint8_t>(c), result_aloca, llvm::Align::Of<uint8_t>());
         return std::make_pair(result, carry);
     };
 
@@ -1458,7 +1520,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
     builder->SetInsertPoint(entry_block);
     auto* const cycle_counter = builder->CreateAlloca(int_type<uint64_t>(*context));
-    builder->CreateStore(int_const<uint64_t>(*context, 0), cycle_counter);
+    builder->CreateAlignedStore(
+        int_const<uint64_t>(*context, 0), cycle_counter, llvm::Align::Of<uint64_t>());
     auto* const aux_8b = builder->CreateAlloca(int_type<uint8_t>(*context));
 
     std::unordered_map<word_t, llvm::BasicBlock*> blocks;
@@ -1471,26 +1534,54 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     auto first = blocks.at(flow.begin()->first);
     builder->CreateBr(first);
 
+    Context ctx{
+        .context = context,
+        .builder = builder.get(),
+        .cpu_type = cpu_struct,
+        .fn = fn,
+        .read_bus_fn = read_bus_fn,
+        .write_bus_fn = write_bus_fn,
+        .add_fn = add_fn,
+        .sub_fn = sub_fn,
+        .call_function_fn = call_function_fn,
+        .cycle_counter_ptr = cycle_counter,
+        .aux_8b_ptr = aux_8b,
+    };
+
     for (auto const& entry : flow) {
         auto* const block = blocks.at(entry.first);
         builder->SetInsertPoint(block);
         llvm::Value* last_result = nullptr;
         for (auto const& instruction : entry.second.instructions) {
+            ctx.inst = &instruction;
             auto* const codegen_fn = instruction_table[static_cast<size_t>(instruction.bytes[0])];
-            Context ctx{
-                .inst = &instruction,
-                .context = context,
-                .builder = builder.get(),
-                .cpu_type = cpu_struct,
-                .fn = fn,
-                .read_bus_fn = read_bus_fn,
-                .write_bus_fn = write_bus_fn,
-                .add_fn = add_fn,
-                .sub_fn = sub_fn,
-                .call_function_fn = call_function_fn,
-                .cycle_counter_ptr = cycle_counter,
-                .aux_8b_ptr = aux_8b,
-            };
+
+            // Check for modification of expected instruction. If modified, abort and let the
+            // interpreter continue the execution.
+            auto const inst_repr = instruction.get_32bit_representation();
+            auto* const p =
+                builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(ctx), 0x10000),
+                                   ctx.fn->getArg(2),
+                                   {int_const(ctx, 0), int_const(ctx, instruction.pc)});
+            auto* const load_inst_repr = unaligned_load<uint32_t>(ctx, p);
+            auto const mask = self_mod_table[static_cast<size_t>(instruction.bytes[0])];
+            auto* const masked_inst_repr = builder->CreateAnd(load_inst_repr, int_const(ctx, mask));
+            auto* const inst_matches = builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ,
+                                                          masked_inst_repr,
+                                                          int_const(ctx, inst_repr & mask));
+            expect(ctx, inst_matches, true);
+
+            auto* const inst_matches_block = llvm::BasicBlock::Create(*context, "", fn);
+            auto* const inst_doesnt_match_block = llvm::BasicBlock::Create(*context, "", fn);
+
+            builder->CreateCondBr(inst_matches, inst_matches_block, inst_doesnt_match_block);
+
+            // If the instruction doesn't match, return
+            builder->SetInsertPoint(inst_doesnt_match_block);
+            return_function(ctx, int_const(ctx, instruction.pc));
+
+            // Else, just continue normally.
+            builder->SetInsertPoint(inst_matches_block);
 
             last_result = codegen_fn(ctx);
             auto const next_addr = instruction.get_pc() + word_t{instruction.length};
@@ -1515,12 +1606,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             auto* const taken_block = blocks.at(*entry.second.next_taken);
             builder->CreateBr(taken_block);
         } else {
-            // Termination block, return number of cycles
-            store_pc(
-                {.context = context, .builder = builder.get(), .cpu_type = cpu_struct, .fn = fn},
-                last_result);
-            auto* const cycles = builder->CreateLoad(int_type<uint64_t>(*context), cycle_counter);
-            builder->CreateRet(cycles);
+            // Termination block, return.
+            return_function(ctx, last_result);
         }
     }
 
