@@ -7,7 +7,7 @@
 
 #include <string_view>
 #include <memory>
-#include <unordered_map>
+#include <atomic>
 #include <mutex>
 
 namespace emu {
@@ -27,6 +27,9 @@ public:
     ~Emulator();
 
 private:
+    template<typename Fn>
+    void async(Fn&& fn);
+
     void jit_function(word_t addr);
     JitFn* get_jit_fn(word_t addr);
 
@@ -36,8 +39,9 @@ private:
     uint64_t _jit_clock_counter{};
     std::mutex _map_mutex;
     std::vector<std::unique_ptr<JitFn>> _jit_functions;
-    std::vector<jit_fn_t> _jit_functions_cache;
+    std::vector<std::atomic<jit_fn_t>> _jit_functions_cache;
     std::unique_ptr<llvm::ThreadPool> _thread_pool{};
+    std::atomic_int _jit_counter{0};
 };
 
 } // namespace emu

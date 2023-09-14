@@ -21,6 +21,7 @@ struct Instruction {
     bool is_jsr() const;
     bool is_call() const;
     bool is_return() const;
+    bool is_indirect_jump() const;
     word_t get_pc() const noexcept { return pc; }
 
     explicit Instruction(word_t pc, Bus const& bus);

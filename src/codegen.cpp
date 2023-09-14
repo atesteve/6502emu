@@ -70,6 +70,7 @@ struct Context {
     llvm::Function* sub_fn{};
     llvm::Function* call_function_fn{};
     llvm::Value* cycle_counter_ptr{};
+    llvm::Value* aux_8b_ptr{};
     llvm::Module* module{};
 };
 
@@ -187,7 +188,6 @@ auto* read_bus(Context const& c, llvm::Value* addr)
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
-    auto* const ret = c.builder->CreateAlloca(int_type<uint8_t>(c));
 
     auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
@@ -201,7 +201,7 @@ auto* read_bus(Context const& c, llvm::Value* addr)
                                          c.fn->getArg(2),
                                          {int_const(c, 0), addr});
     auto* const value_read = c.builder->CreateLoad(int_type<uint8_t>(c), p);
-    c.builder->CreateStore(value_read, ret);
+    c.builder->CreateStore(value_read, c.aux_8b_ptr);
     c.builder->CreateBr(continue_block);
 
     // If mapped memory, perform a call to the bus object
@@ -210,12 +210,12 @@ auto* read_bus(Context const& c, llvm::Value* addr)
         c.read_bus_fn->getFunctionType(), c.read_bus_fn, {c.fn->getArg(1), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-    c.builder->CreateStore(call, ret);
+    c.builder->CreateStore(call, c.aux_8b_ptr);
     c.builder->CreateBr(continue_block);
 
     // Load produced value and continue
     c.builder->SetInsertPoint(continue_block);
-    return c.builder->CreateLoad(int_type<uint8_t>(c), ret);
+    return c.builder->CreateLoad(int_type<uint8_t>(c), c.aux_8b_ptr);
 }
 
 void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
@@ -1335,7 +1335,9 @@ auto* create_call_function_function_type(llvm::LLVMContext& context, llvm::Struc
     return fn_type;
 }
 
-[[maybe_unused]] void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
+} // namespace
+
+void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
 {
     // Create the analysis managers.
     llvm::LoopAnalysisManager LAM;
@@ -1366,8 +1368,6 @@ auto* create_call_function_function_type(llvm::LLVMContext& context, llvm::Struc
     // Optimize the IR!
     MPM.run(module, MAM);
 }
-
-} // namespace
 
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                       std::map<word_t, control_block> const& flow)
@@ -1457,8 +1457,9 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
     auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
     builder->SetInsertPoint(entry_block);
-    auto* const cycle_counter = builder->CreateAlloca(llvm::IntegerType::getInt64Ty(*context));
+    auto* const cycle_counter = builder->CreateAlloca(int_type<uint64_t>(*context));
     builder->CreateStore(int_const<uint64_t>(*context, 0), cycle_counter);
+    auto* const aux_8b = builder->CreateAlloca(int_type<uint8_t>(*context));
 
     std::unordered_map<word_t, llvm::BasicBlock*> blocks;
     for (auto const& entry : flow) {
@@ -1488,6 +1489,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                 .sub_fn = sub_fn,
                 .call_function_fn = call_function_fn,
                 .cycle_counter_ptr = cycle_counter,
+                .aux_8b_ptr = aux_8b,
             };
 
             last_result = codegen_fn(ctx);
@@ -1526,10 +1528,6 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         module->print(llvm::errs(), nullptr);
         return nullptr;
     }
-
-    // module->print(llvm::errs(), nullptr);
-    optimize(*module, llvm::OptimizationLevel::O3);
-    // module->print(llvm::errs(), nullptr);
 
     return module;
 }

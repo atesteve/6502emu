@@ -40,6 +40,9 @@ byte_t Bus::read(word_t address) const noexcept
         auto const diff = std::chrono::steady_clock::now() - prev;
         spdlog::info("Time: {}", std::chrono::duration_cast<std::chrono::milliseconds>(diff));
         byte_t const ret{std::cin.get()};
+        if (ret == 0x65_b) {
+            ::exit(0);
+        }
         prev = std::chrono::steady_clock::now();
         return ret;
     }

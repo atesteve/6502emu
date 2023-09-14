@@ -1004,5 +1004,6 @@ bool Instruction::is_valid() const
 bool Instruction::is_jsr() const { return bytes[0] == 0x20_b; }
 bool Instruction::is_call() const { return bytes[0] == 0_b || is_jsr(); }
 bool Instruction::is_return() const { return bytes[0] == 0x40_b || bytes[0] == 0x60_b; }
+bool Instruction::is_indirect_jump() const { return bytes[0] == 0x6c_b; }
 
 } // namespace emu::inst
