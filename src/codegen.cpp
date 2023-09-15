@@ -125,9 +125,9 @@ llvm::ConstantInt* int_const(Context const& c, Int value)
 }
 
 template<typename Int>
-void expect(Context const& c, llvm::Value* value, Int expected_value)
+llvm::Value* expect(Context const& c, llvm::Value* value, Int expected_value)
 {
-    c.builder->CreateIntrinsic(
+    return c.builder->CreateIntrinsic(
         llvm::Intrinsic::expect, {int_type<Int>(c)}, {value, int_const<Int>(c, expected_value)});
 }
 
@@ -212,8 +212,7 @@ void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
 void return_function(Context const& c, llvm::Value* pc_value)
 {
     store_pc(c, pc_value);
-    auto* const cycles = c.builder->CreateAlignedLoad(
-        int_type<uint64_t>(c), c.cycle_counter_ptr, llvm::Align::Of<uint64_t>());
+    auto* const cycles = load<uint64_t>(c, c.cycle_counter_ptr);
     c.builder->CreateRet(cycles);
 }
 
@@ -222,13 +221,12 @@ auto* read_bus(Context const& c, llvm::Value* addr)
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
-    expect(c, eq_0, true);
 
     auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
 
-    c.builder->CreateCondBr(eq_0, regular_memory_block, mapped_memory_block);
+    c.builder->CreateCondBr(expect(c, eq_0, true), regular_memory_block, mapped_memory_block);
 
     // If regular memory, just read from memory
     c.builder->SetInsertPoint(regular_memory_block);
@@ -241,8 +239,7 @@ auto* read_bus(Context const& c, llvm::Value* addr)
 
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(mapped_memory_block);
-    auto* const call = c.builder->CreateCall(
-        c.read_bus_fn->getFunctionType(), c.read_bus_fn, {c.fn->getArg(1), addr});
+    auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(1), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     store<uint8_t>(c, call, c.aux_8b_ptr);
@@ -258,13 +255,12 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
-    expect(c, eq_0, true);
 
     auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
     auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
 
-    c.builder->CreateCondBr(eq_0, regular_memory_block, mapped_memory_block);
+    c.builder->CreateCondBr(expect(c, eq_0, true), regular_memory_block, mapped_memory_block);
 
     // If regular memory, just write to memory
     c.builder->SetInsertPoint(regular_memory_block);
@@ -276,8 +272,7 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
 
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(mapped_memory_block);
-    auto* const call = c.builder->CreateCall(
-        c.write_bus_fn->getFunctionType(), c.write_bus_fn, {c.fn->getArg(1), addr, value});
+    auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(1), addr, value});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     c.builder->CreateBr(continue_block);
@@ -290,8 +285,8 @@ void add_cycle_counter(Context const& c, llvm::Value* value);
 
 void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 {
-    c.builder->CreateCall(
-        c.call_function_fn->getFunctionType(), c.call_function_fn, {c.fn->getArg(3), addr});
+    store_pc(c, addr);
+    c.builder->CreateCall(c.call_function_fn, {c.fn->getArg(3), addr});
 
     // add_cycle_counter(c, result);
 
@@ -301,19 +296,17 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     auto* const eq = c.builder->CreateCmp(
         llvm::CmpInst::Predicate::ICMP_EQ, current_pc, int_const(c, next_addr));
     // Hint the optimizer that the most common outcome is that the PC is correct.
-    expect(c, eq, true);
 
     auto* const block_eq =
         llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_eq", next_addr), c.fn);
     auto* const block_ne =
         llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_ne", next_addr), c.fn);
 
-    c.builder->CreateCondBr(eq, block_eq, block_ne);
+    c.builder->CreateCondBr(expect(c, eq, true), block_eq, block_ne);
 
     // If the PC after return does not match the expected PC, return
     c.builder->SetInsertPoint(block_ne);
-    auto* const cycles = load<uint64_t>(c, c.cycle_counter_ptr);
-    c.builder->CreateRet(cycles);
+    return_function(c, current_pc);
 
     // Otherwise, just continue
     c.builder->SetInsertPoint(block_eq);
@@ -783,7 +776,7 @@ llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 {
     auto const [addr, op, cycles] = addr_mode(c, true, false);
     auto* const fn = add ? c.add_fn : c.sub_fn;
-    auto* const call = c.builder->CreateCall(fn->getFunctionType(), fn, {c.fn->getArg(0), op});
+    auto* const call = c.builder->CreateCall(fn, {c.fn->getArg(0), op});
     call->setCallingConv(llvm::CallingConv::Fast);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
@@ -1407,13 +1400,29 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     llvm::CGSCCAnalysisManager CGAM;
     llvm::ModuleAnalysisManager MAM;
 
+    auto gen_level = llvm::CodeGenOpt::Level::None;
+    switch (opt_level.getSpeedupLevel()) {
+    case 0:
+        gen_level = llvm::CodeGenOpt::Level::None;
+        break;
+    case 1:
+        gen_level = llvm::CodeGenOpt::Level::Less;
+        break;
+    case 2:
+        gen_level = llvm::CodeGenOpt::Level::Default;
+        break;
+    case 3:
+        gen_level = llvm::CodeGenOpt::Level::Aggressive;
+        break;
+    }
+
     // Create the new pass manager builder.
     // Take a look at the PassBuilder constructor parameters for more
     // customization, e.g. specifying a TargetMachine or various debugging
     // options.
     auto target_machine =
         std::move(*llvm::orc::JITTargetMachineBuilder::detectHost()->createTargetMachine());
-    target_machine->setOptLevel(llvm::CodeGenOpt::Level::Aggressive);
+    target_machine->setOptLevel(gen_level);
     llvm::PassBuilder PB{target_machine.get()};
 
     // Register all the basic analyses with the managers.
@@ -1569,12 +1578,12 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             auto* const inst_matches = builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ,
                                                           masked_inst_repr,
                                                           int_const(ctx, inst_repr & mask));
-            expect(ctx, inst_matches, true);
 
             auto* const inst_matches_block = llvm::BasicBlock::Create(*context, "", fn);
             auto* const inst_doesnt_match_block = llvm::BasicBlock::Create(*context, "", fn);
 
-            builder->CreateCondBr(inst_matches, inst_matches_block, inst_doesnt_match_block);
+            builder->CreateCondBr(
+                expect(ctx, inst_matches, true), inst_matches_block, inst_doesnt_match_block);
 
             // If the instruction doesn't match, return
             builder->SetInsertPoint(inst_doesnt_match_block);
@@ -1587,7 +1596,6 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             auto const next_addr = instruction.get_pc() + word_t{instruction.length};
 
             if (instruction.is_call()) {
-                store_pc(ctx, last_result);
                 make_function_call(ctx, last_result, next_addr);
             }
         }
