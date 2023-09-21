@@ -1,5 +1,4 @@
 #include "codegen.h"
-#include "cpu.h"
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -146,7 +145,7 @@ void store(Context const& c, llvm::Value* value, llvm::Value* ptr)
 template<typename Int>
 llvm::Value* unaligned_load(Context const& c, llvm::Value* ptr)
 {
-    return c.builder->CreateLoad(int_type<Int>(c), ptr);
+    return c.builder->CreateAlignedLoad(int_type<Int>(c), ptr, llvm::Align{1});
 }
 
 llvm::Value* assemble(Context const& c, llvm::Value* lo, llvm::Value* hi)
@@ -692,7 +691,7 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
         cycles = c.builder->CreateAdd(cycles_base, add_cycles);
     }
 
-    store_pc(c, int_const(c, c.inst->pc));
+    // store_pc(c, int_const(c, c.inst->pc));
     add_cycle_counter(c, cycles);
 
     return test_result;
@@ -1119,7 +1118,7 @@ constinit std::array<inst_codegen_t, 256> const instruction_table{
 // The table below only works in little-endian systems
 static_assert(std::endian::native == std::endian::little,
               "Big or mixed endian architectures not supported yet");
-constinit std::array<uint32_t, 256> const self_mod_table{
+constinit std::array<uint16_t, 256> const self_mod_table{
 //       -0      -1    -2    -3 -4    -5    -6    -7 -8    -9    -a    -b -c    -d    -e    -f
 /* 0- */ 0xff,   0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, 0xff, _, _,    0xff, 0xff, _,
 /* 1- */ 0xffff, 0xff, _,    _, _,    0xff, 0xff, _, 0xff, 0xff, _,    _, _,    0xff, 0xff, _,
@@ -1567,13 +1566,13 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
             // Check for modification of expected instruction. If modified, abort and let the
             // interpreter continue the execution.
-            auto const inst_repr = instruction.get_32bit_representation();
+            auto const inst_repr = instruction.get_16bit_representation();
             auto* const p =
                 builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(ctx), 0x10000),
                                    ctx.fn->getArg(2),
                                    {int_const(ctx, 0), int_const(ctx, instruction.pc)});
-            auto* const load_inst_repr = unaligned_load<uint32_t>(ctx, p);
-            auto const mask = self_mod_table[static_cast<size_t>(instruction.bytes[0])];
+            auto* const load_inst_repr = unaligned_load<uint16_t>(ctx, p);
+            auto const mask = word_t{self_mod_table[static_cast<size_t>(instruction.bytes[0])]};
             auto* const masked_inst_repr = builder->CreateAnd(load_inst_repr, int_const(ctx, mask));
             auto* const inst_matches = builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ,
                                                           masked_inst_repr,

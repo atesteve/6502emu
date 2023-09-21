@@ -1007,16 +1007,16 @@ bool Instruction::is_call() const { return bytes[0] == 0_b || is_jsr(); }
 bool Instruction::is_return() const { return bytes[0] == 0x40_b || bytes[0] == 0x60_b; }
 bool Instruction::is_indirect_jump() const { return bytes[0] == 0x6c_b; }
 
-uint32_t Instruction::get_32bit_representation() const
+word_t Instruction::get_16bit_representation() const
 {
     static_assert(std::endian::native == std::endian::little,
                   "Big or mixed endian architectures not supported yet");
 
-    uint32_t ret = 0;
+    word_t ret{0};
     int shift = 0;
 
-    for (auto i = 0u; i < length; ++i) {
-        ret |= static_cast<uint32_t>(bytes[i]) << shift;
+    for (auto i = 0u; i < std::max<uint16_t>(length, 2); ++i) {
+        ret |= static_cast<word_t>(bytes[i]) << shift;
         shift += 8;
     }
 
