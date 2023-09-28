@@ -1,23 +1,17 @@
-#define __cpp_concepts 202002L
-
 #include "control_flow.h"
 #include "instruction.h"
 #include "types.h"
 
 #include <vector>
 #include <cassert>
-#include <expected>
 #include <stdexcept>
+#include <optional>
 #include <unordered_set>
 #include <algorithm>
 
 using namespace emu::literals;
 
 namespace emu {
-
-enum class JumpError {
-    JUMP_TO_MIDDLE_OF_INSTRUCTION,
-};
 
 std::map<word_t, control_block> build_control_flow(Bus const& bus,
                                                    word_t entry_point,
@@ -71,7 +65,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
     };
 
     auto const get_block = [&](word_t next_addr,
-                               word_t src_block_addr) -> std::expected<control_block*, JumpError> {
+                               word_t src_block_addr) -> std::optional<control_block*> {
         auto const it = prev_safe(block_map, block_map.upper_bound(next_addr));
 
         // Jump before any existing block
@@ -90,7 +84,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
         if (it->first == src_block_addr) {
             auto const block_instruction_it = get_inst_from_address(block, next_addr);
             if (block_instruction_it->pc != next_addr && next_addr <= block.last_addr) {
-                return std::unexpected(JumpError::JUMP_TO_MIDDLE_OF_INSTRUCTION);
+                return std::nullopt;
             }
             if (next_addr <= block.last_addr + 1_w) {
                 return &it->second;
@@ -107,7 +101,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
 
         // Jump into an invalid location of a complete block
         if (block_instruction_it->pc != next_addr && next_addr <= block.last_addr) {
-            return std::unexpected(JumpError::JUMP_TO_MIDDLE_OF_INSTRUCTION);
+            return std::nullopt;
         }
 
         // Jump after the end of a complete block
