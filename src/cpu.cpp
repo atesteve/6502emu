@@ -9,8 +9,17 @@
 #include <chrono>
 
 namespace emu {
-
 using namespace literals;
+
+namespace {
+
+struct Timing {
+    std::chrono::steady_clock::time_point start{};
+} timing;
+
+constexpr auto t0 = std::chrono::steady_clock::time_point{};
+
+} // namespace
 
 Bus::Bus()
     : memory_space(std::size_t{0x10000})
@@ -36,15 +45,16 @@ void Bus::load_file(std::filesystem::path const& p, word_t address)
 byte_t Bus::read(word_t address) const noexcept
 {
     if (address == 0xf004_w) {
-        static std::chrono::steady_clock::time_point prev{};
-        auto const diff = std::chrono::steady_clock::now() - prev;
-        spdlog::info("Time: {}", std::chrono::duration_cast<std::chrono::milliseconds>(diff));
+        if (timing.start != t0) {
+            auto const diff = std::chrono::steady_clock::now() - timing.start;
+            timing.start = t0;
+            spdlog::info("Time: {}", std::chrono::duration_cast<std::chrono::milliseconds>(diff));
+        }
 
         byte_t const ret{std::cin.get()};
         if (ret == 0x65_b) {
             ::exit(0);
         }
-        prev = std::chrono::steady_clock::now();
         return ret;
     }
     return memory_space[static_cast<size_t>(address)];
@@ -53,6 +63,10 @@ byte_t Bus::read(word_t address) const noexcept
 void Bus::write(word_t address, byte_t value) noexcept
 {
     if (address == 0xf001_w) {
+        if (timing.start == t0) {
+            timing.start = std::chrono::steady_clock::now();
+        }
+
         std::cout << static_cast<char>(value);
         std::cout.flush();
     }
