@@ -1,6 +1,4 @@
 #include "emulator.h"
-#include "control_flow.h"
-#include "codegen.h"
 #include "jit.h"
 
 #include <spdlog/spdlog.h>
@@ -9,7 +7,6 @@
 
 #include <cstdint>
 #include <chrono>
-#include <thread>
 #include <iostream>
 
 using namespace emu::literals;

@@ -103,7 +103,7 @@ void Emulator::jit_function(word_t addr)
     auto const finish_codegen = std::chrono::steady_clock::now();
 
 #ifdef NDEBUG
-    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O0);
+    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O3);
 #endif
     auto const finish_optimize = std::chrono::steady_clock::now();
 

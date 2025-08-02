@@ -1453,9 +1453,9 @@ void build_base()
     auto module = std::make_unique<llvm::Module>("base_functions", *context);
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
+#ifndef NDEBUG
     auto* cpu_struct = create_cpu_struct_type(*context);
 
-#ifndef NDEBUG
     // Sanity check
     auto* cpu_struct_layout = module->getDataLayout().getStructLayout(cpu_struct);
     auto* sr_struct_layout = module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
