@@ -213,7 +213,7 @@ void return_function(Context const& c, llvm::Value* pc_value)
     c.builder->CreateRet(cycles);
 }
 
-auto* read_bus(Context const& c, llvm::Value* addr)
+llvm::Value* read_bus(Context const& c, llvm::Value* addr)
 {
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
@@ -245,6 +245,24 @@ auto* read_bus(Context const& c, llvm::Value* addr)
     // Load produced value and continue
     c.builder->SetInsertPoint(continue_block);
     return load<uint8_t>(c, c.aux_8b_ptr);
+}
+
+llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
+{
+    if (addr->getZExtValue() < 0x8000) {
+        // If regular memory, just read from memory
+        auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
+                                             c.fn->getArg(2),
+                                             {int_const(c, 0), addr});
+        return load<uint8_t>(c, p);
+    } else {
+
+        // If mapped memory, perform a call to the bus object
+        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(1), addr});
+        call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+            *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+        return call;
+    }
 }
 
 void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
