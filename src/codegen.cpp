@@ -1440,7 +1440,6 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
     // Create the pass manager.
-    // This one corresponds to a typical -O2 optimization pipeline.
     llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(opt_level);
 
     // Optimize the IR!

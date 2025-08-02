@@ -112,7 +112,7 @@ protected:
     std::unique_ptr<llvm::orc::LLJIT> _jit;
     emu::CPU _cpu{};
     emu::Bus _bus{};
-    emu::Emulator _em{};
+    emu::Emulator _em{0};
 };
 
 TEST_P(TestJitCodegen, Test)

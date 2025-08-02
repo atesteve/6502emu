@@ -23,7 +23,7 @@ public:
     void initialize(std::string_view image_file, word_t load_address, word_t entry_point);
     uint64_t call_function(word_t addr);
 
-    Emulator();
+    Emulator(int optimization_level);
     ~Emulator();
 
 private:
@@ -42,6 +42,7 @@ private:
     std::vector<std::atomic<jit_fn_t>> _jit_functions_cache;
     std::unique_ptr<llvm::ThreadPoolInterface> _thread_pool{};
     std::atomic_int _jit_counter{0};
+    int _optimization_level;
 };
 
 } // namespace emu

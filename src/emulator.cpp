@@ -10,6 +10,7 @@
 #include <fmt/chrono.h>
 
 #include <chrono>
+#include <array>
 
 namespace emu {
 namespace {
@@ -23,10 +24,11 @@ struct JitFn {
     std::unique_ptr<llvm::Module> module;
 };
 
-Emulator::Emulator()
+Emulator::Emulator(int optimization_level)
     : _jit_functions(size_t{0x10000})
     , _jit_functions_cache(size_t{0x10000})
     , _thread_pool{std::make_unique<llvm::StdThreadPool>()}
+    , _optimization_level{optimization_level}
 {}
 
 Emulator::~Emulator() {}
@@ -96,15 +98,19 @@ void Emulator::jit_function(word_t addr)
                 continue;
             }
         }
-        async([this, call_addr] { jit_function(call_addr); });
+        async([=, this] { jit_function(call_addr); });
     }
 
     jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
-#ifdef NDEBUG
-    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O3);
-#endif
+    emu::optimize(*jit_fn.module,
+                  std::array{llvm::OptimizationLevel::O0,
+                             llvm::OptimizationLevel::O1,
+                             llvm::OptimizationLevel::O2,
+                             llvm::OptimizationLevel::O3}
+                      .at(_optimization_level));
+
     auto const finish_optimize = std::chrono::steady_clock::now();
 
     exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));
@@ -135,6 +141,10 @@ JitFn* Emulator::get_jit_fn(word_t addr)
 
 uint64_t Emulator::call_function(word_t addr)
 {
+    if (_optimization_level < 0) {
+        return run();
+    }
+
     auto const index = static_cast<size_t>(addr);
     jit_fn_t const cache_fn = _jit_functions_cache[index];
     if (cache_fn != nullptr) {
@@ -157,6 +167,10 @@ void Emulator::initialize(std::string_view image_file, word_t load_address, word
 {
     _bus.load_file(image_file, load_address);
     _cpu.PC = entry_point;
+
+    if (_optimization_level < 0) {
+        return;
+    }
 
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();

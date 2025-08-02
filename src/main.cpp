@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 #include <fmt/chrono.h>
 #include <boost/program_options.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include <cstdint>
 #include <chrono>
@@ -12,13 +13,29 @@
 using namespace emu::literals;
 using namespace std::literals;
 
+namespace po = boost::program_options;
+
+namespace {
 llvm::ExitOnError exit_on_error;
 
-namespace global {
-emu::Emulator emulator;
-}
+} // namespace
 
-namespace po = boost::program_options;
+struct Opt {
+    int level;
+
+    friend void validate(boost::any& v, const std::vector<std::string>& values, Opt*, int)
+    {
+        po::validators::check_first_occurrence(v);
+        const std::string& s = po::validators::get_single_string(values);
+
+        auto level = boost::lexical_cast<int>(s);
+        level = std::min(level, 3);
+        level = std::max(level, -1);
+        v = Opt{level};
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, Opt const& arg) { return os << arg.level; }
+};
 
 int main(int argc, char** argv)
 {
@@ -29,6 +46,7 @@ int main(int argc, char** argv)
         ("bin-file,b",     po::value<std::string>()->required(),        "binary file image")
         ("entry-point,e",  po::value<uint16_t>()->default_value(0x400), "entry point address")
         ("load-address,a", po::value<uint16_t>()->default_value(0),     "binary file load address")
+        ("opt,O",          po::value<Opt>()->default_value(Opt{0}),     "JIT optimization level. -1 means no JIT")
     ;
     // clang-format on
 
@@ -51,10 +69,11 @@ int main(int argc, char** argv)
     std::string const bin_file = vm["bin-file"].as<std::string>();
     auto const entry_point = static_cast<emu::word_t>(vm["entry-point"].as<uint16_t>());
     auto const load_address = static_cast<emu::word_t>(vm["load-address"].as<uint16_t>());
+    auto const optimization_level = vm["opt"].as<Opt>().level;
 
     spdlog::set_level(spdlog::level::debug);
 
-    using namespace global;
+    emu::Emulator emulator{optimization_level};
     emulator.initialize(bin_file, load_address, entry_point);
 
     uint64_t instruction_count = 0;
