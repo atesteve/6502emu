@@ -22,16 +22,9 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
     std::vector incomplete_blocks{first_it};
     std::unordered_set<word_t> complete_blocks;
 
-    auto const prev_safe = [](auto& cont, auto it) {
-        if (it == cont.begin()) {
-            return cont.end();
-        }
-        return std::prev(it);
-    };
-
     auto const get_inst_from_address = [&](control_block& block, word_t address) {
         auto ret = std::ranges::upper_bound(
-            block.instructions, address, std::less<>{}, &inst::Instruction::get_pc);
+            block.instructions, address, std::less{}, &inst::Instruction::get_pc);
         assert(ret != block.instructions.begin());
         return std::prev(ret);
     };
@@ -52,65 +45,52 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
         block.instructions.erase(block_instruction_it, block.instructions.end());
         block.next_taken = std::nullopt;
         block.next_not_taken = next_addr;
-        block.last_addr = next_addr - 1_w;
+        block.last_addr = next_addr;
         block.complete = true;
 
         return &new_block_it->second;
     };
 
-    auto const create_incomplete_block = [&](word_t next_addr) {
-        auto const new_block_it = block_map.emplace(next_addr, control_block{}).first;
+    auto const create_incomplete_block = [&](word_t dst_addr) {
+        auto const new_block_it = block_map.emplace(dst_addr, control_block{}).first;
         incomplete_blocks.push_back(new_block_it);
         return &new_block_it->second;
     };
 
-    auto const get_block = [&](word_t next_addr,
-                               word_t src_block_addr) -> std::optional<control_block*> {
-        auto const it = prev_safe(block_map, block_map.upper_bound(next_addr));
+    auto const get_destination_block = [&](word_t dst_addr) -> std::optional<control_block*> {
+        auto const block_it = block_map.upper_bound(dst_addr);
 
         // Jump before any existing block
-        if (it == block_map.cend()) {
-            return create_incomplete_block(next_addr);
+        if (block_it == block_map.cbegin()) {
+            return create_incomplete_block(dst_addr);
         }
 
-        auto& block = it->second;
+        auto& [block_addr, block] = *std::prev(block_it);
 
         // Jump to the start of an existing block
-        if (it->first == next_addr) {
-            return &it->second;
-        }
-
-        // Jump into the source block
-        if (it->first == src_block_addr) {
-            auto const block_instruction_it = get_inst_from_address(block, next_addr);
-            if (block_instruction_it->pc != next_addr && next_addr <= block.last_addr) {
-                return std::nullopt;
-            }
-            if (next_addr <= block.last_addr + 1_w) {
-                return &it->second;
-            }
-            return create_incomplete_block(next_addr);
+        if (block_addr == dst_addr) {
+            return &block;
         }
 
         // Jump after an incomplete block
         if (!block.complete) {
-            return create_incomplete_block(next_addr);
+            return create_incomplete_block(dst_addr);
         }
 
-        auto const block_instruction_it = get_inst_from_address(block, next_addr);
+        auto const block_instruction_it = get_inst_from_address(block, dst_addr);
 
         // Jump into an invalid location of a complete block
-        if (block_instruction_it->pc != next_addr && next_addr <= block.last_addr) {
+        if (block_instruction_it->pc != dst_addr && dst_addr < block.last_addr) {
             return std::nullopt;
         }
 
         // Jump after the end of a complete block
-        if (next_addr > block.last_addr) {
-            return create_incomplete_block(next_addr);
+        if (dst_addr >= block.last_addr) {
+            return create_incomplete_block(dst_addr);
         }
 
         // Jump into the middle of an existing block, break it up.
-        return break_up_block(block, next_addr);
+        return break_up_block(block, dst_addr);
     };
 
     while (!incomplete_blocks.empty()) {
@@ -138,8 +118,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
                 block->next_taken = taken;
                 block->next_not_taken = not_taken;
 
-                if (auto taken_dest = get_block(*taken, block->instructions.front().pc);
-                    taken_dest.has_value()) {
+                if (auto taken_dest = get_destination_block(*taken); taken_dest.has_value()) {
                     if (*taken != block->instructions.front().pc && *taken_dest == block) {
                         block = break_up_block(*block, *taken);
                     }
@@ -147,7 +126,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
                     throw std::runtime_error{"Jump into middle of instruction"};
                 }
 
-                if (auto not_taken_dest = get_block(*not_taken, block->instructions.front().pc);
+                if (auto not_taken_dest = get_destination_block(*not_taken);
                     not_taken_dest.has_value()) {
                     if (*not_taken_dest == block) {
                         create_incomplete_block(*not_taken);
@@ -162,8 +141,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
                 // Inconditional jump or branch instruction
                 block->next_taken = taken;
 
-                if (auto taken_dest = get_block(*taken, block->instructions.front().pc);
-                    taken_dest.has_value()) {
+                if (auto taken_dest = get_destination_block(*taken); taken_dest.has_value()) {
                     if (*taken != block->instructions.front().pc && *taken_dest == block) {
                         block = break_up_block(*block, *taken);
                     }
@@ -178,7 +156,7 @@ std::map<word_t, control_block> build_control_flow(Bus const& bus,
                 block->complete = true;
             } else {
                 // Non jump or branch instruction
-                if (auto not_taken_dest = get_block(*not_taken, block->instructions.front().pc);
+                if (auto not_taken_dest = get_destination_block(*not_taken);
                     not_taken_dest.has_value()) {
                     if (not_taken_dest != block) {
                         block->next_not_taken = not_taken;
