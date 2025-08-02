@@ -48,6 +48,7 @@ enum class RegOffset : uint32_t {
     Y,
     SR,
 };
+using enum RegOffset;
 
 enum class FlagOffset : uint32_t {
     N,
@@ -57,6 +58,7 @@ enum class FlagOffset : uint32_t {
     Z,
     C,
 };
+using enum FlagOffset;
 
 struct Context {
     inst::Instruction const* inst{};
@@ -172,19 +174,15 @@ void store_reg(Context const& c, RegOffset offset, llvm::Value* value)
 
 void store_pc(Context const& c, llvm::Value* value)
 {
-    auto* p =
-        c.builder->CreateGEP(c.cpu_type,
-                             c.fn->getArg(0),
-                             {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
+    auto* p = c.builder->CreateGEP(
+        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
     store<uint16_t>(c, value, p);
 }
 
 llvm::Value* load_pc(Context const& c)
 {
-    auto* p =
-        c.builder->CreateGEP(c.cpu_type,
-                             c.fn->getArg(0),
-                             {int_const(c, 0), int_const(c, std::to_underlying(RegOffset::PC))});
+    auto* p = c.builder->CreateGEP(
+        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
     return load<uint16_t>(c, p);
 }
 
@@ -193,7 +191,7 @@ auto* load_flag(Context const& c, FlagOffset offset)
     auto* p = c.builder->CreateGEP(c.cpu_type,
                                    c.fn->getArg(0),
                                    {int_const(c, 0),
-                                    int_const(c, std::to_underlying(RegOffset::SR)),
+                                    int_const(c, std::to_underlying(SR)),
                                     int_const(c, std::to_underlying(offset))});
     return load<bool>(c, p);
 }
@@ -203,7 +201,7 @@ void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
     auto* p = c.builder->CreateGEP(c.cpu_type,
                                    c.fn->getArg(0),
                                    {int_const(c, 0),
-                                    int_const(c, std::to_underlying(RegOffset::SR)),
+                                    int_const(c, std::to_underlying(SR)),
                                     int_const(c, std::to_underlying(offset))});
     store<bool>(c, value, p);
 }
@@ -353,7 +351,7 @@ addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
 addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_extra_cycle)
 {
     auto* const base_addr = read_2_byte_opcode(c);
-    auto* const x_reg = load_reg(c, RegOffset::X);
+    auto* const x_reg = load_reg(c, X);
     auto* const x_reg_16 = c.builder->CreateZExt(x_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, x_reg_16);
     llvm::Value* op = nullptr;
@@ -382,7 +380,7 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
 addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
     auto* const base_addr = read_2_byte_opcode(c);
-    auto* const y_reg = load_reg(c, RegOffset::Y);
+    auto* const y_reg = load_reg(c, Y);
     auto* const y_reg_16 = c.builder->CreateZExt(y_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg_16);
 
@@ -411,7 +409,7 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_ext
 addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = read_1_byte_opcode(c);
-    auto* const x_reg = load_reg(c, RegOffset::X);
+    auto* const x_reg = load_reg(c, X);
     auto* const zero_page_addr = c.builder->CreateAdd(zero_page_base, x_reg);
     auto* const zero_page_addr_p1 = c.builder->CreateAdd(zero_page_addr, int_const(c, 1_b));
     auto* const zero_page_addr_16 = c.builder->CreateZExt(zero_page_addr, int_type<uint16_t>(c));
@@ -439,7 +437,7 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
     auto* const base_addr_hi = read_bus(c, zero_page_base_16_p1);
     auto* const base_addr = assemble(c, base_addr_lo, base_addr_hi);
 
-    auto* const y_reg = c.builder->CreateZExt(load_reg(c, RegOffset::Y), int_type<uint16_t>(c));
+    auto* const y_reg = c.builder->CreateZExt(load_reg(c, Y), int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg);
 
     llvm::Value* op = nullptr;
@@ -478,7 +476,7 @@ addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = read_1_byte_opcode(c);
-    auto* const x_reg = load_reg(c, RegOffset::X);
+    auto* const x_reg = load_reg(c, X);
     auto* const addr = c.builder->CreateAdd(zero_page_base, x_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
     auto* const op = dereference ? read_bus(c, addr_16) : nullptr;
@@ -492,7 +490,7 @@ addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
 addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference, bool)
 {
     auto* const zero_page_base = read_1_byte_opcode(c);
-    auto* const y_reg = load_reg(c, RegOffset::Y);
+    auto* const y_reg = load_reg(c, Y);
     auto* const addr = c.builder->CreateAdd(zero_page_base, y_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
     auto* const op = dereference ? read_bus(c, addr_16) : nullptr;
@@ -512,10 +510,10 @@ llvm::Value* is_negative(Context const& c, llvm::Value* value)
 
 void set_n_z(Context const& c, llvm::Value* value)
 {
-    store_flag(c, FlagOffset::N, is_negative(c, value));
+    store_flag(c, N, is_negative(c, value));
     auto* const eq_zero =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, value, int_const(c, 0_b));
-    store_flag(c, FlagOffset::Z, eq_zero);
+    store_flag(c, Z, eq_zero);
 }
 
 void add_cycle_counter(Context const& c, llvm::Value* value)
@@ -534,19 +532,19 @@ using build_bin_fn_t = llvm::Value* (llvm::IRBuilder<>::*)(llvm::Value*,
 
 void push(Context const& c, llvm::Value* value)
 {
-    auto* const sp = load_reg(c, RegOffset::SP);
+    auto* const sp = load_reg(c, SP);
     auto* const sp_16 = c.builder->CreateZExt(sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(sp_16, int_const(c, STACK_BASE));
     write_bus(c, stack_addr, value);
     auto* const decreased_sp = c.builder->CreateSub(sp, int_const(c, 1_b));
-    store_reg(c, RegOffset::SP, decreased_sp);
+    store_reg(c, SP, decreased_sp);
 }
 
 llvm::Value* pop(Context const& c)
 {
-    auto* const sp = load_reg(c, RegOffset::SP);
+    auto* const sp = load_reg(c, SP);
     auto* const increased_sp = c.builder->CreateAdd(sp, int_const(c, 1_b));
-    store_reg(c, RegOffset::SP, increased_sp);
+    store_reg(c, SP, increased_sp);
     auto* const increased_sp_16 = c.builder->CreateZExt(increased_sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(increased_sp_16, int_const(c, STACK_BASE));
     return read_bus(c, stack_addr);
@@ -554,12 +552,12 @@ llvm::Value* pop(Context const& c)
 
 llvm::Value* load_sr(Context const& c)
 {
-    auto* const n_flag = c.builder->CreateZExt(load_flag(c, FlagOffset::N), int_type<uint8_t>(c));
-    auto* const v_flag = c.builder->CreateZExt(load_flag(c, FlagOffset::V), int_type<uint8_t>(c));
-    auto* const d_flag = c.builder->CreateZExt(load_flag(c, FlagOffset::D), int_type<uint8_t>(c));
-    auto* const i_flag = c.builder->CreateZExt(load_flag(c, FlagOffset::I), int_type<uint8_t>(c));
-    auto* const z_flag = c.builder->CreateZExt(load_flag(c, FlagOffset::Z), int_type<uint8_t>(c));
-    auto* const c_shift = c.builder->CreateZExt(load_flag(c, FlagOffset::C), int_type<uint8_t>(c));
+    auto* const n_flag = c.builder->CreateZExt(load_flag(c, N), int_type<uint8_t>(c));
+    auto* const v_flag = c.builder->CreateZExt(load_flag(c, V), int_type<uint8_t>(c));
+    auto* const d_flag = c.builder->CreateZExt(load_flag(c, D), int_type<uint8_t>(c));
+    auto* const i_flag = c.builder->CreateZExt(load_flag(c, I), int_type<uint8_t>(c));
+    auto* const z_flag = c.builder->CreateZExt(load_flag(c, Z), int_type<uint8_t>(c));
+    auto* const c_shift = c.builder->CreateZExt(load_flag(c, C), int_type<uint8_t>(c));
 
     auto* const n_shift = c.builder->CreateShl(n_flag, 7);
     auto* const v_shift = c.builder->CreateShl(v_flag, 6);
@@ -594,12 +592,12 @@ void store_sr(Context const& c, llvm::Value* value)
     auto* const z_shift = c.builder->CreateICmp(llvm::CmpInst::ICMP_NE, z_flag, int_const(c, 0_b));
     auto* const c_shift = c.builder->CreateICmp(llvm::CmpInst::ICMP_NE, c_flag, int_const(c, 0_b));
 
-    store_flag(c, FlagOffset::N, n_shift);
-    store_flag(c, FlagOffset::V, v_shift);
-    store_flag(c, FlagOffset::D, d_shift);
-    store_flag(c, FlagOffset::I, i_shift);
-    store_flag(c, FlagOffset::Z, z_shift);
-    store_flag(c, FlagOffset::C, c_shift);
+    store_flag(c, N, n_shift);
+    store_flag(c, V, v_shift);
+    store_flag(c, D, d_shift);
+    store_flag(c, I, i_shift);
+    store_flag(c, Z, z_shift);
+    store_flag(c, C, c_shift);
 }
 
 // Generic instruction code gen
@@ -607,9 +605,9 @@ void store_sr(Context const& c, llvm::Value* value)
 llvm::Value* bin_logic_op(Context const& c, build_bin_fn_t bin_fn, addr_fn_t addr_mode)
 {
     auto const [addr, op, cycles] = addr_mode(c, true, false);
-    auto* const a_reg = load_reg(c, RegOffset::A);
+    auto* const a_reg = load_reg(c, A);
     auto* const result = std::invoke(bin_fn, c.builder, a_reg, op, "");
-    store_reg(c, RegOffset::A, result);
+    store_reg(c, A, result);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
@@ -644,10 +642,10 @@ using shift_fn_t = std::pair<llvm::Value*, llvm::Value*> (*)(Context const& c,
 llvm::Value* shift_mem_op(Context const& c, shift_fn_t fn, bool roll, addr_fn_t addr_mode)
 {
     auto const [addr, op, cycles] = addr_mode(c, true, true);
-    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, FlagOffset::C))
+    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, C))
                                 : static_cast<llvm::Value*>(int_const(c, false));
     auto const [result, carry_flag] = fn(c, op, shift_in);
-    store_flag(c, FlagOffset::C, carry_flag);
+    store_flag(c, C, carry_flag);
     write_bus(c, addr, result);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 3)));
@@ -656,12 +654,12 @@ llvm::Value* shift_mem_op(Context const& c, shift_fn_t fn, bool roll, addr_fn_t 
 
 llvm::Value* shift_A_op(Context const& c, shift_fn_t fn, bool roll)
 {
-    auto* const a_reg = load_reg(c, RegOffset::A);
-    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, FlagOffset::C))
+    auto* const a_reg = load_reg(c, A);
+    auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, C))
                                 : static_cast<llvm::Value*>(int_const(c, false));
     auto const [result, carry_flag] = fn(c, a_reg, shift_in);
-    store_flag(c, FlagOffset::C, carry_flag);
-    store_reg(c, RegOffset::A, result);
+    store_flag(c, C, carry_flag);
+    store_reg(c, A, result);
     set_n_z(c, result);
     add_cycle_counter(c, int_const<uint64_t>(c, 2));
     return nullptr;
@@ -703,8 +701,7 @@ llvm::Value* cmp_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
     auto* const reg = load_reg(c, reg_offset);
     auto* const result = c.builder->CreateSub(reg, op);
 
-    store_flag(
-        c, FlagOffset::C, c.builder->CreateICmp(llvm::CmpInst::Predicate::ICMP_ULE, op, reg));
+    store_flag(c, C, c.builder->CreateICmp(llvm::CmpInst::Predicate::ICMP_ULE, op, reg));
     set_n_z(c, result);
 
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -716,7 +713,7 @@ llvm::Value* transfer_op(Context const& c, RegOffset src_offset, RegOffset dst_o
     auto* const src_reg = load_reg(c, src_offset);
     store_reg(c, dst_offset, src_reg);
 
-    if (dst_offset != RegOffset::SP) {
+    if (dst_offset != SP) {
         set_n_z(c, src_reg);
     }
 
@@ -793,14 +790,14 @@ llvm::Value* BIT_op(Context const& c, addr_fn_t addr_mode)
     auto* const new_v =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_NE, v_bit, int_const(c, 0_b));
 
-    auto* const a_reg = load_reg(c, RegOffset::A);
+    auto* const a_reg = load_reg(c, A);
     auto* const a_masked = c.builder->CreateAnd(a_reg, op);
     auto* const new_z =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, a_masked, int_const(c, 0_b));
 
-    store_flag(c, FlagOffset::N, new_n);
-    store_flag(c, FlagOffset::V, new_v);
-    store_flag(c, FlagOffset::Z, new_z);
+    store_flag(c, N, new_n);
+    store_flag(c, V, new_v);
+    store_flag(c, Z, new_z);
 
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
@@ -884,109 +881,109 @@ llvm::Value* SBC_zpg_X(Context const& c) { return add_sub_op(c, addr_zpg_X, fals
 llvm::Value* SBC_abs_Y(Context const& c) { return add_sub_op(c, addr_abs_Y, false); }
 llvm::Value* SBC_abs_X(Context const& c) { return add_sub_op(c, addr_abs_X, false); }
 
-llvm::Value* CMP_X_ind(Context const& c) { return cmp_op(c, RegOffset::A, addr_X_ind); }
-llvm::Value* CMP_zpg(Context const& c)   { return cmp_op(c, RegOffset::A, addr_zpg); }
-llvm::Value* CMP_imm(Context const& c)   { return cmp_op(c, RegOffset::A, addr_imm); }
-llvm::Value* CMP_abs(Context const& c)   { return cmp_op(c, RegOffset::A, addr_abs); }
-llvm::Value* CMP_ind_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_ind_Y); }
-llvm::Value* CMP_zpg_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_zpg_X); }
-llvm::Value* CMP_abs_Y(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_Y); }
-llvm::Value* CMP_abs_X(Context const& c) { return cmp_op(c, RegOffset::A, addr_abs_X); }
+llvm::Value* CMP_X_ind(Context const& c) { return cmp_op(c, A, addr_X_ind); }
+llvm::Value* CMP_zpg(Context const& c)   { return cmp_op(c, A, addr_zpg); }
+llvm::Value* CMP_imm(Context const& c)   { return cmp_op(c, A, addr_imm); }
+llvm::Value* CMP_abs(Context const& c)   { return cmp_op(c, A, addr_abs); }
+llvm::Value* CMP_ind_Y(Context const& c) { return cmp_op(c, A, addr_ind_Y); }
+llvm::Value* CMP_zpg_X(Context const& c) { return cmp_op(c, A, addr_zpg_X); }
+llvm::Value* CMP_abs_Y(Context const& c) { return cmp_op(c, A, addr_abs_Y); }
+llvm::Value* CMP_abs_X(Context const& c) { return cmp_op(c, A, addr_abs_X); }
 
-llvm::Value* CPX_imm(Context const& c) { return cmp_op(c, RegOffset::X, addr_imm); }
-llvm::Value* CPX_zpg(Context const& c) { return cmp_op(c, RegOffset::X, addr_zpg); }
-llvm::Value* CPX_abs(Context const& c) { return cmp_op(c, RegOffset::X, addr_abs); }
+llvm::Value* CPX_imm(Context const& c) { return cmp_op(c, X, addr_imm); }
+llvm::Value* CPX_zpg(Context const& c) { return cmp_op(c, X, addr_zpg); }
+llvm::Value* CPX_abs(Context const& c) { return cmp_op(c, X, addr_abs); }
 
-llvm::Value* CPY_imm(Context const& c) { return cmp_op(c, RegOffset::Y, addr_imm); }
-llvm::Value* CPY_zpg(Context const& c) { return cmp_op(c, RegOffset::Y, addr_zpg); }
-llvm::Value* CPY_abs(Context const& c) { return cmp_op(c, RegOffset::Y, addr_abs); }
+llvm::Value* CPY_imm(Context const& c) { return cmp_op(c, Y, addr_imm); }
+llvm::Value* CPY_zpg(Context const& c) { return cmp_op(c, Y, addr_zpg); }
+llvm::Value* CPY_abs(Context const& c) { return cmp_op(c, Y, addr_abs); }
 
-llvm::Value* STA_X_ind(Context const& c) { return store_op(c, RegOffset::A, addr_X_ind); }
-llvm::Value* STA_zpg(Context const& c)   { return store_op(c, RegOffset::A, addr_zpg); }
-llvm::Value* STA_abs(Context const& c)   { return store_op(c, RegOffset::A, addr_abs); }
-llvm::Value* STA_ind_Y(Context const& c) { return store_op(c, RegOffset::A, addr_ind_Y); }
-llvm::Value* STA_zpg_X(Context const& c) { return store_op(c, RegOffset::A, addr_zpg_X); }
-llvm::Value* STA_abs_Y(Context const& c) { return store_op(c, RegOffset::A, addr_abs_Y); }
-llvm::Value* STA_abs_X(Context const& c) { return store_op(c, RegOffset::A, addr_abs_X); }
+llvm::Value* STA_X_ind(Context const& c) { return store_op(c, A, addr_X_ind); }
+llvm::Value* STA_zpg(Context const& c)   { return store_op(c, A, addr_zpg); }
+llvm::Value* STA_abs(Context const& c)   { return store_op(c, A, addr_abs); }
+llvm::Value* STA_ind_Y(Context const& c) { return store_op(c, A, addr_ind_Y); }
+llvm::Value* STA_zpg_X(Context const& c) { return store_op(c, A, addr_zpg_X); }
+llvm::Value* STA_abs_Y(Context const& c) { return store_op(c, A, addr_abs_Y); }
+llvm::Value* STA_abs_X(Context const& c) { return store_op(c, A, addr_abs_X); }
 
-llvm::Value* STX_zpg(Context const& c)   { return store_op(c, RegOffset::X, addr_zpg); }
-llvm::Value* STX_abs(Context const& c)   { return store_op(c, RegOffset::X, addr_abs); }
-llvm::Value* STX_zpg_Y(Context const& c) { return store_op(c, RegOffset::X, addr_zpg_Y); }
+llvm::Value* STX_zpg(Context const& c)   { return store_op(c, X, addr_zpg); }
+llvm::Value* STX_abs(Context const& c)   { return store_op(c, X, addr_abs); }
+llvm::Value* STX_zpg_Y(Context const& c) { return store_op(c, X, addr_zpg_Y); }
 
-llvm::Value* STY_zpg(Context const& c)   { return store_op(c, RegOffset::Y, addr_zpg); }
-llvm::Value* STY_abs(Context const& c)   { return store_op(c, RegOffset::Y, addr_abs); }
-llvm::Value* STY_zpg_X(Context const& c) { return store_op(c, RegOffset::Y, addr_zpg_X); }
+llvm::Value* STY_zpg(Context const& c)   { return store_op(c, Y, addr_zpg); }
+llvm::Value* STY_abs(Context const& c)   { return store_op(c, Y, addr_abs); }
+llvm::Value* STY_zpg_X(Context const& c) { return store_op(c, Y, addr_zpg_X); }
 
-llvm::Value* LDA_X_ind(Context const& c) { return load_op(c, RegOffset::A, addr_X_ind); }
-llvm::Value* LDA_zpg(Context const& c)   { return load_op(c, RegOffset::A, addr_zpg); }
-llvm::Value* LDA_imm(Context const& c)   { return load_op(c, RegOffset::A, addr_imm); }
-llvm::Value* LDA_abs(Context const& c)   { return load_op(c, RegOffset::A, addr_abs); }
-llvm::Value* LDA_ind_Y(Context const& c) { return load_op(c, RegOffset::A, addr_ind_Y); }
-llvm::Value* LDA_zpg_X(Context const& c) { return load_op(c, RegOffset::A, addr_zpg_X); }
-llvm::Value* LDA_abs_Y(Context const& c) { return load_op(c, RegOffset::A, addr_abs_Y); }
-llvm::Value* LDA_abs_X(Context const& c) { return load_op(c, RegOffset::A, addr_abs_X); }
+llvm::Value* LDA_X_ind(Context const& c) { return load_op(c, A, addr_X_ind); }
+llvm::Value* LDA_zpg(Context const& c)   { return load_op(c, A, addr_zpg); }
+llvm::Value* LDA_imm(Context const& c)   { return load_op(c, A, addr_imm); }
+llvm::Value* LDA_abs(Context const& c)   { return load_op(c, A, addr_abs); }
+llvm::Value* LDA_ind_Y(Context const& c) { return load_op(c, A, addr_ind_Y); }
+llvm::Value* LDA_zpg_X(Context const& c) { return load_op(c, A, addr_zpg_X); }
+llvm::Value* LDA_abs_Y(Context const& c) { return load_op(c, A, addr_abs_Y); }
+llvm::Value* LDA_abs_X(Context const& c) { return load_op(c, A, addr_abs_X); }
 
-llvm::Value* LDX_imm(Context const& c)   { return load_op(c, RegOffset::X, addr_imm); }
-llvm::Value* LDX_zpg(Context const& c)   { return load_op(c, RegOffset::X, addr_zpg); }
-llvm::Value* LDX_abs(Context const& c)   { return load_op(c, RegOffset::X, addr_abs); }
-llvm::Value* LDX_zpg_Y(Context const& c) { return load_op(c, RegOffset::X, addr_zpg_Y); }
-llvm::Value* LDX_abs_Y(Context const& c) { return load_op(c, RegOffset::X, addr_abs_Y); }
+llvm::Value* LDX_imm(Context const& c)   { return load_op(c, X, addr_imm); }
+llvm::Value* LDX_zpg(Context const& c)   { return load_op(c, X, addr_zpg); }
+llvm::Value* LDX_abs(Context const& c)   { return load_op(c, X, addr_abs); }
+llvm::Value* LDX_zpg_Y(Context const& c) { return load_op(c, X, addr_zpg_Y); }
+llvm::Value* LDX_abs_Y(Context const& c) { return load_op(c, X, addr_abs_Y); }
 
-llvm::Value* LDY_imm(Context const& c)   { return load_op(c, RegOffset::Y, addr_imm); }
-llvm::Value* LDY_zpg(Context const& c)   { return load_op(c, RegOffset::Y, addr_zpg); }
-llvm::Value* LDY_abs(Context const& c)   { return load_op(c, RegOffset::Y, addr_abs); }
-llvm::Value* LDY_zpg_X(Context const& c) { return load_op(c, RegOffset::Y, addr_zpg_X); }
-llvm::Value* LDY_abs_X(Context const& c) { return load_op(c, RegOffset::Y, addr_abs_X); }
+llvm::Value* LDY_imm(Context const& c)   { return load_op(c, Y, addr_imm); }
+llvm::Value* LDY_zpg(Context const& c)   { return load_op(c, Y, addr_zpg); }
+llvm::Value* LDY_abs(Context const& c)   { return load_op(c, Y, addr_abs); }
+llvm::Value* LDY_zpg_X(Context const& c) { return load_op(c, Y, addr_zpg_X); }
+llvm::Value* LDY_abs_X(Context const& c) { return load_op(c, Y, addr_abs_X); }
 
 llvm::Value* INC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   true); }
 llvm::Value* INC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   true); }
 llvm::Value* INC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, true); }
 llvm::Value* INC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, true); }
 
-llvm::Value* INX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, true); }
-llvm::Value* INY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, true); }
+llvm::Value* INX_impl(Context const& c) { return inc_dec_reg_op(c, X, true); }
+llvm::Value* INY_impl(Context const& c) { return inc_dec_reg_op(c, Y, true); }
 
 llvm::Value* DEC_zpg(Context const& c)   { return inc_dec_mem_op(c, addr_zpg,   false); }
 llvm::Value* DEC_abs(Context const& c)   { return inc_dec_mem_op(c, addr_abs,   false); }
 llvm::Value* DEC_zpg_X(Context const& c) { return inc_dec_mem_op(c, addr_zpg_X, false); }
 llvm::Value* DEC_abs_X(Context const& c) { return inc_dec_mem_op(c, addr_abs_X, false); }
 
-llvm::Value* DEX_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::X, false); }
-llvm::Value* DEY_impl(Context const& c) { return inc_dec_reg_op(c, RegOffset::Y, false); }
+llvm::Value* DEX_impl(Context const& c) { return inc_dec_reg_op(c, X, false); }
+llvm::Value* DEY_impl(Context const& c) { return inc_dec_reg_op(c, Y, false); }
 
 llvm::Value* BIT_zpg(Context const& c) { return BIT_op(c, addr_zpg); }
 llvm::Value* BIT_abs(Context const& c) { return BIT_op(c, addr_abs); }
 
-llvm::Value* BVC_rel(Context const& c) { return branch_op(c, FlagOffset::V, false); }
-llvm::Value* BVS_rel(Context const& c) { return branch_op(c, FlagOffset::V, true);  }
-llvm::Value* BPL_rel(Context const& c) { return branch_op(c, FlagOffset::N, false); }
-llvm::Value* BMI_rel(Context const& c) { return branch_op(c, FlagOffset::N, true);  }
-llvm::Value* BCC_rel(Context const& c) { return branch_op(c, FlagOffset::C, false); }
-llvm::Value* BCS_rel(Context const& c) { return branch_op(c, FlagOffset::C, true);  }
-llvm::Value* BNE_rel(Context const& c) { return branch_op(c, FlagOffset::Z, false); }
-llvm::Value* BEQ_rel(Context const& c) { return branch_op(c, FlagOffset::Z, true);  }
+llvm::Value* BVC_rel(Context const& c) { return branch_op(c, V, false); }
+llvm::Value* BVS_rel(Context const& c) { return branch_op(c, V, true);  }
+llvm::Value* BPL_rel(Context const& c) { return branch_op(c, N, false); }
+llvm::Value* BMI_rel(Context const& c) { return branch_op(c, N, true);  }
+llvm::Value* BCC_rel(Context const& c) { return branch_op(c, C, false); }
+llvm::Value* BCS_rel(Context const& c) { return branch_op(c, C, true);  }
+llvm::Value* BNE_rel(Context const& c) { return branch_op(c, Z, false); }
+llvm::Value* BEQ_rel(Context const& c) { return branch_op(c, Z, true);  }
 
-llvm::Value* TAX_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::X); }
-llvm::Value* TXA_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::A); }
-llvm::Value* TAY_impl(Context const& c) { return transfer_op(c, RegOffset::A, RegOffset::Y); }
-llvm::Value* TYA_impl(Context const& c) { return transfer_op(c, RegOffset::Y, RegOffset::A); }
-llvm::Value* TXS_impl(Context const& c) { return transfer_op(c, RegOffset::X, RegOffset::SP); }
-llvm::Value* TSX_impl(Context const& c) { return transfer_op(c, RegOffset::SP, RegOffset::X); }
+llvm::Value* TAX_impl(Context const& c) { return transfer_op(c, A, X); }
+llvm::Value* TXA_impl(Context const& c) { return transfer_op(c, X, A); }
+llvm::Value* TAY_impl(Context const& c) { return transfer_op(c, A, Y); }
+llvm::Value* TYA_impl(Context const& c) { return transfer_op(c, Y, A); }
+llvm::Value* TXS_impl(Context const& c) { return transfer_op(c, X, SP); }
+llvm::Value* TSX_impl(Context const& c) { return transfer_op(c, SP, X); }
 
-llvm::Value* SEC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, true); }
-llvm::Value* SEI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, true); }
-llvm::Value* SED_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, true); }
+llvm::Value* SEC_impl(Context const& c) { return set_flag_op(c, C, true); }
+llvm::Value* SEI_impl(Context const& c) { return set_flag_op(c, I, true); }
+llvm::Value* SED_impl(Context const& c) { return set_flag_op(c, D, true); }
 
-llvm::Value* CLC_impl(Context const& c) { return set_flag_op(c, FlagOffset::C, false); }
-llvm::Value* CLI_impl(Context const& c) { return set_flag_op(c, FlagOffset::I, false); }
-llvm::Value* CLV_impl(Context const& c) { return set_flag_op(c, FlagOffset::V, false); }
-llvm::Value* CLD_impl(Context const& c) { return set_flag_op(c, FlagOffset::D, false); }
+llvm::Value* CLC_impl(Context const& c) { return set_flag_op(c, C, false); }
+llvm::Value* CLI_impl(Context const& c) { return set_flag_op(c, I, false); }
+llvm::Value* CLV_impl(Context const& c) { return set_flag_op(c, V, false); }
+llvm::Value* CLD_impl(Context const& c) { return set_flag_op(c, D, false); }
 
 // clang-format on
 
 llvm::Value* PHA_impl(Context const& c)
 {
-    auto* const a_reg = load_reg(c, RegOffset::A);
+    auto* const a_reg = load_reg(c, A);
     push(c, a_reg);
     add_cycle_counter(c, int_const<uint64_t>(c, 3));
     return nullptr;
@@ -995,7 +992,7 @@ llvm::Value* PHA_impl(Context const& c)
 llvm::Value* PLA_impl(Context const& c)
 {
     auto* const new_a = pop(c);
-    store_reg(c, RegOffset::A, new_a);
+    store_reg(c, A, new_a);
     set_n_z(c, new_a);
     add_cycle_counter(c, int_const<uint64_t>(c, 4));
     return nullptr;
@@ -1079,7 +1076,7 @@ llvm::Value* BRK_impl(Context const& c)
     push(c, int_const(c, static_cast<byte_t>(next_pc)));
     push(c, load_sr(c));
 
-    store_flag(c, FlagOffset::I, int_const(c, true));
+    store_flag(c, I, int_const(c, true));
 
     add_cycle_counter(c, int_const<uint64_t>(c, 7));
 
@@ -1146,7 +1143,7 @@ void create_bin_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
     auto* const rhs_ze = c.builder->CreateZExt(rhs, int_type<uint16_t>(c));
     auto* const lhs_se = c.builder->CreateSExt(lhs, int_type<int16_t>(c));
     auto* const rhs_se = c.builder->CreateSExt(rhs, int_type<int16_t>(c));
-    auto* const carry = load_flag(c, FlagOffset::C);
+    auto* const carry = load_flag(c, C);
     auto* const carry_ze = c.builder->CreateZExt(carry, int_type<uint16_t>(c));
 
     auto* const result_ze_tmp = c.builder->CreateAdd(lhs_ze, rhs_ze);
@@ -1160,16 +1157,16 @@ void create_bin_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
     auto* const lt_n128 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_SLT, result_se, int_const(c, -128_sw));
     auto* const new_v = c.builder->CreateOr(gt_127, lt_n128);
-    store_flag(c, FlagOffset::V, new_v);
+    store_flag(c, V, new_v);
 
     auto* const new_c =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_UGT, result_ze, int_const(c, 255_w));
-    store_flag(c, FlagOffset::C, new_c);
+    store_flag(c, C, new_c);
 
     auto const result = c.builder->CreateTrunc(result_ze, int_type<uint8_t>(c));
 
     set_n_z(c, result);
-    store_reg(c, RegOffset::A, result);
+    store_reg(c, A, result);
 
     c.builder->CreateRetVoid();
 }
@@ -1214,16 +1211,16 @@ void create_dec_add_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         return std::make_pair(result, carry);
     };
 
-    auto* const c_flag = load_flag(c, FlagOffset::C);
+    auto* const c_flag = load_flag(c, C);
     auto const [result_lo, carry_lo] = half_dec_add(lhs_lo, rhs_lo, c_flag);
     auto const [result_hi, carry_hi] = half_dec_add(lhs_hi, rhs_hi, carry_lo);
 
     auto* const result_hi_l = c.builder->CreateShl(result_hi, 4);
     auto* const result = c.builder->CreateOr(result_lo, result_hi_l);
 
-    store_flag(c, FlagOffset::C, carry_hi);
+    store_flag(c, C, carry_hi);
     set_n_z(c, result);
-    store_reg(c, RegOffset::A, result);
+    store_reg(c, A, result);
 
     c.builder->CreateRetVoid();
 }
@@ -1271,25 +1268,26 @@ void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
         return std::make_pair(result, carry);
     };
 
-    auto* const c_flag = load_flag(c, FlagOffset::C);
+    auto* const c_flag = load_flag(c, C);
     auto const [result_lo, carry_lo] = half_dec_sub(lhs_lo, rhs_lo, c_flag);
     auto const [result_hi, carry_hi] = half_dec_sub(lhs_hi, rhs_hi, carry_lo);
 
     auto* const result_hi_l = c.builder->CreateShl(result_hi, 4);
     auto* const result = c.builder->CreateOr(result_lo, result_hi_l);
 
-    store_flag(c, FlagOffset::C, carry_hi);
+    store_flag(c, C, carry_hi);
     set_n_z(c, result);
-    store_reg(c, RegOffset::A, result);
+    store_reg(c, A, result);
 
     c.builder->CreateRetVoid();
 }
 
 auto* create_add_sub_fn(Context const& c, bool add)
 {
-    auto* fn_type = llvm::FunctionType::get(llvm::Type::getVoidTy(*c.context),
-                                            {c.cpu_type->getPointerTo(), int_type<uint8_t>(c)},
-                                            false);
+    auto* fn_type =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(*c.context),
+                                {llvm::PointerType::get(*c.context, 0), int_type<uint8_t>(c)},
+                                false);
     auto* fn = llvm::Function::Create(
         fn_type, llvm::Function::LinkageTypes::PrivateLinkage, add ? "add_fn" : "sub_fn", c.module);
     fn->addFnAttr(llvm::Attribute::AttrKind::InlineHint);
@@ -1304,8 +1302,8 @@ auto* create_add_sub_fn(Context const& c, bool add)
 
     c.builder->SetInsertPoint(entry_block);
 
-    auto* const a_reg = load_reg(new_context, RegOffset::A);
-    auto* const d_flag = load_flag(new_context, FlagOffset::D);
+    auto* const a_reg = load_reg(new_context, A);
+    auto* const d_flag = load_flag(new_context, D);
     auto* const not_decimal =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, d_flag, int_const(c, false));
     auto* const arg_comp = c.builder->CreateNot(fn->getArg(1));
@@ -1351,41 +1349,62 @@ auto* create_cpu_struct_type(llvm::LLVMContext& context)
     return cpu_struct;
 }
 
-auto* create_jit_function_type(llvm::LLVMContext& context,
-                               llvm::StructType* cpu_type,
-                               llvm::StructType* bus_type,
-                               llvm::StructType* emu_type)
+auto* create_jit_function_type(llvm::LLVMContext& context)
 {
     auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
-                                            {cpu_type->getPointerTo(),
-                                             bus_type->getPointerTo(),
-                                             int_type<uint8_t>(context)->getPointerTo(),
-                                             emu_type->getPointerTo()},
+                                            {llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0)},
                                             false);
     return fn_type;
 }
 
-auto* create_bus_read_function_type(llvm::LLVMContext& context, llvm::StructType* bus_type)
-{
-    auto* fn_type = llvm::FunctionType::get(
-        int_type<uint8_t>(context), {bus_type->getPointerTo(), int_type<uint16_t>(context)}, false);
-    return fn_type;
-}
-
-auto* create_bus_write_function_type(llvm::LLVMContext& context, llvm::StructType* bus_type)
-{
-    auto* fn_type = llvm::FunctionType::get(
-        llvm::Type::getVoidTy(context),
-        {bus_type->getPointerTo(), int_type<uint16_t>(context), int_type<uint8_t>(context)},
-        false);
-    return fn_type;
-}
-
-auto* create_call_function_function_type(llvm::LLVMContext& context, llvm::StructType* emu_type)
+auto* create_instruction_function_type(llvm::LLVMContext& context)
 {
     auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
-                                            {emu_type->getPointerTo(), int_type<uint16_t>(context)},
+                                            {llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0)},
                                             false);
+    return fn_type;
+}
+
+auto* create_addr_mode_function_type(llvm::LLVMContext& context)
+{
+    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
+                                            {llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0),
+                                             llvm::PointerType::get(context, 0)},
+                                            false);
+    return fn_type;
+}
+
+auto* create_bus_read_function_type(llvm::LLVMContext& context)
+{
+    auto* fn_type =
+        llvm::FunctionType::get(int_type<uint8_t>(context),
+                                {llvm::PointerType::get(context, 0), int_type<uint16_t>(context)},
+                                false);
+    return fn_type;
+}
+
+auto* create_bus_write_function_type(llvm::LLVMContext& context)
+{
+    auto* fn_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                            {llvm::PointerType::get(context, 0),
+                                             int_type<uint16_t>(context),
+                                             int_type<uint8_t>(context)},
+                                            false);
+    return fn_type;
+}
+
+auto* create_call_function_function_type(llvm::LLVMContext& context)
+{
+    auto* fn_type =
+        llvm::FunctionType::get(int_type<uint64_t>(context),
+                                {llvm::PointerType::get(context, 0), int_type<uint16_t>(context)},
+                                false);
     return fn_type;
 }
 
@@ -1399,21 +1418,10 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     llvm::CGSCCAnalysisManager CGAM;
     llvm::ModuleAnalysisManager MAM;
 
-    auto gen_level = llvm::CodeGenOpt::Level::None;
-    switch (opt_level.getSpeedupLevel()) {
-    case 0:
-        gen_level = llvm::CodeGenOpt::Level::None;
-        break;
-    case 1:
-        gen_level = llvm::CodeGenOpt::Level::Less;
-        break;
-    case 2:
-        gen_level = llvm::CodeGenOpt::Level::Default;
-        break;
-    case 3:
-        gen_level = llvm::CodeGenOpt::Level::Aggressive;
-        break;
-    }
+    const auto gen_level = [opt_level] {
+        auto ret = llvm::CodeGenOpt::getLevel(opt_level.getSpeedupLevel());
+        return ret ? *ret : *llvm::CodeGenOpt::getLevel(0);
+    }();
 
     // Create the new pass manager builder.
     // Take a look at the PassBuilder constructor parameters for more
@@ -1439,12 +1447,10 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     MPM.run(module, MAM);
 }
 
-std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
-                                      std::map<word_t, control_block> const& flow)
+void build_base()
 {
-    auto lock = tsc.getLock();
-    auto* context = tsc.getContext();
-    auto module = std::make_unique<llvm::Module>("test_module", *context);
+    auto context = std::make_unique<llvm::LLVMContext>();
+    auto module = std::make_unique<llvm::Module>("base_functions", *context);
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
     auto* cpu_struct = create_cpu_struct_type(*context);
@@ -1455,53 +1461,56 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     auto* sr_struct_layout = module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
         cpu_struct->getElementType(std::to_underlying(RegOffset::SR))));
     assert(cpu_struct_layout->getSizeInBytes() == sizeof(CPU));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::PC))
-           == offsetof(CPU, PC));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::SP))
-           == offsetof(CPU, SP));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::A))
-           == offsetof(CPU, A));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::X))
-           == offsetof(CPU, X));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::Y))
-           == offsetof(CPU, Y));
+    assert(cpu_struct_layout->getElementOffset(std::to_underlying(PC)) == offsetof(CPU, PC));
+    assert(cpu_struct_layout->getElementOffset(std::to_underlying(SP)) == offsetof(CPU, SP));
+    assert(cpu_struct_layout->getElementOffset(std::to_underlying(A)) == offsetof(CPU, A));
+    assert(cpu_struct_layout->getElementOffset(std::to_underlying(X)) == offsetof(CPU, X));
+    assert(cpu_struct_layout->getElementOffset(std::to_underlying(Y)) == offsetof(CPU, Y));
     assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::SR))
            == offsetof(CPU, SR));
 
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::N))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(N))
            == offsetof(decltype(CPU::SR), N));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::V))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(V))
            == offsetof(decltype(CPU::SR), V));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::D))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(D))
            == offsetof(decltype(CPU::SR), D));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::I))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(I))
            == offsetof(decltype(CPU::SR), I));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::Z))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(Z))
            == offsetof(decltype(CPU::SR), Z));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(FlagOffset::C))
+    assert(sr_struct_layout->getElementOffset(std::to_underlying(C))
            == offsetof(decltype(CPU::SR), C));
 #endif // NDEBUG
+}
 
-    auto* bus_struct = llvm::StructType::create(*context, "emu_Bus");      // Just declared
-    auto* emu_struct = llvm::StructType::create(*context, "emu_Emulator"); // Just declared
+std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
+                                      std::map<word_t, control_block> const& flow)
+{
+    auto lock = tsc.getLock();
+    auto* context = tsc.getContext();
+    auto module = std::make_unique<llvm::Module>("test_module", *context);
+    auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
-    auto* fn_type = create_jit_function_type(*context, cpu_struct, bus_struct, emu_struct);
+    auto* cpu_struct = create_cpu_struct_type(*context);
+
+    auto* fn_type = create_jit_function_type(*context);
     auto* fn = llvm::Function::Create(fn_type,
                                       llvm::Function::LinkageTypes::ExternalLinkage,
                                       fmt::format("fn_{:04x}", flow.begin()->first),
                                       module.get());
 
-    auto* read_bus_fn_type = create_bus_read_function_type(*context, bus_struct);
+    auto* read_bus_fn_type = create_bus_read_function_type(*context);
     auto* read_bus_fn = llvm::Function::Create(
         read_bus_fn_type, llvm::Function::LinkageTypes::ExternalLinkage, "read_bus", module.get());
 
-    auto* write_bus_fn_type = create_bus_write_function_type(*context, bus_struct);
+    auto* write_bus_fn_type = create_bus_write_function_type(*context);
     auto* write_bus_fn = llvm::Function::Create(write_bus_fn_type,
                                                 llvm::Function::LinkageTypes::ExternalLinkage,
                                                 "write_bus",
                                                 module.get());
 
-    auto* call_function_fn_type = create_call_function_function_type(*context, bus_struct);
+    auto* call_function_fn_type = create_call_function_function_type(*context);
     auto* call_function_fn = llvm::Function::Create(call_function_fn_type,
                                                     llvm::Function::LinkageTypes::ExternalLinkage,
                                                     "call_function",

@@ -40,7 +40,7 @@ private:
     std::mutex _map_mutex;
     std::vector<std::unique_ptr<JitFn>> _jit_functions;
     std::vector<std::atomic<jit_fn_t>> _jit_functions_cache;
-    std::unique_ptr<llvm::ThreadPool> _thread_pool{};
+    std::unique_ptr<llvm::ThreadPoolInterface> _thread_pool{};
     std::atomic_int _jit_counter{0};
 };
 

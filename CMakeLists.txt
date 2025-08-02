@@ -64,7 +64,7 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
 # Find the libraries that correspond to the LLVM components that we wish to use
-llvm_map_components_to_libnames(llvm_libs -16) # This is a hack!!
+llvm_map_components_to_libnames(llvm_libs -20) # This is a hack!!
 
 message(STATUS "LLVM libs: ${llvm_libs}")
 

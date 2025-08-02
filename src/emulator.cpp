@@ -26,7 +26,7 @@ struct JitFn {
 Emulator::Emulator()
     : _jit_functions(size_t{0x10000})
     , _jit_functions_cache(size_t{0x10000})
-    , _thread_pool{std::make_unique<llvm::ThreadPool>()}
+    , _thread_pool{std::make_unique<llvm::StdThreadPool>()}
 {}
 
 Emulator::~Emulator() {}
@@ -103,7 +103,7 @@ void Emulator::jit_function(word_t addr)
     auto const finish_codegen = std::chrono::steady_clock::now();
 
 #ifdef NDEBUG
-    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O3);
+    emu::optimize(*jit_fn.module, llvm::OptimizationLevel::O0);
 #endif
     auto const finish_optimize = std::chrono::steady_clock::now();
 

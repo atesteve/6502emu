@@ -248,7 +248,7 @@ struct std::hash<emu::SafeInt<Int, Token>> : std::hash<Int> {
 
 template<std::integral Int, typename Token>
 struct fmt::formatter<emu::SafeInt<Int, Token>> : public fmt::formatter<Int> {
-    constexpr auto format(emu::SafeInt<Int, Token> const& n, fmt::format_context& ctx)
+    constexpr auto format(emu::SafeInt<Int, Token> const& n, fmt::format_context& ctx) const
     {
         return fmt::formatter<Int>::format(static_cast<Int>(n), ctx);
     }
