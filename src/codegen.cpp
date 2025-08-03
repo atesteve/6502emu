@@ -78,11 +78,13 @@ struct Context {
 
 using inst_codegen_t = llvm::Value* (*)(Context const&);
 
+enum JitFnArg : int { CPU, BUS, MEMORY, EMULATOR };
+
 // Addressing modes
 
 struct addr_mode_result_t {
     llvm::Value* addr;
-    llvm::Value* op;
+    llvm::Value* argument;
     llvm::Value* cycles;
 };
 
@@ -161,35 +163,35 @@ llvm::Value* assemble(Context const& c, llvm::Value* lo, llvm::Value* hi)
 auto* load_reg(Context const& c, RegOffset offset)
 {
     auto* p = c.builder->CreateGEP(
-        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
+        c.cpu_type, c.fn->getArg(CPU), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
     return load<uint8_t>(c, p);
 }
 
 void store_reg(Context const& c, RegOffset offset, llvm::Value* value)
 {
     auto* p = c.builder->CreateGEP(
-        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
+        c.cpu_type, c.fn->getArg(CPU), {int_const(c, 0), int_const(c, std::to_underlying(offset))});
     store<uint8_t>(c, value, p);
 }
 
 void store_pc(Context const& c, llvm::Value* value)
 {
     auto* p = c.builder->CreateGEP(
-        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
+        c.cpu_type, c.fn->getArg(CPU), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
     store<uint16_t>(c, value, p);
 }
 
 llvm::Value* load_pc(Context const& c)
 {
     auto* p = c.builder->CreateGEP(
-        c.cpu_type, c.fn->getArg(0), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
+        c.cpu_type, c.fn->getArg(CPU), {int_const(c, 0), int_const(c, std::to_underlying(PC))});
     return load<uint16_t>(c, p);
 }
 
 auto* load_flag(Context const& c, FlagOffset offset)
 {
     auto* p = c.builder->CreateGEP(c.cpu_type,
-                                   c.fn->getArg(0),
+                                   c.fn->getArg(CPU),
                                    {int_const(c, 0),
                                     int_const(c, std::to_underlying(SR)),
                                     int_const(c, std::to_underlying(offset))});
@@ -199,7 +201,7 @@ auto* load_flag(Context const& c, FlagOffset offset)
 void store_flag(Context const& c, FlagOffset offset, llvm::Value* value)
 {
     auto* p = c.builder->CreateGEP(c.cpu_type,
-                                   c.fn->getArg(0),
+                                   c.fn->getArg(CPU),
                                    {int_const(c, 0),
                                     int_const(c, std::to_underlying(SR)),
                                     int_const(c, std::to_underlying(offset))});
@@ -228,7 +230,7 @@ llvm::Value* read_bus(Context const& c, llvm::Value* addr)
     // If regular memory, just read from memory
     c.builder->SetInsertPoint(regular_memory_block);
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
-                                         c.fn->getArg(2),
+                                         c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
     auto* const value_read = load<uint8_t>(c, p);
     store<uint8_t>(c, value_read, c.aux_8b_ptr);
@@ -236,7 +238,7 @@ llvm::Value* read_bus(Context const& c, llvm::Value* addr)
 
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(mapped_memory_block);
-    auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(1), addr});
+    auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     store<uint8_t>(c, call, c.aux_8b_ptr);
@@ -252,13 +254,13 @@ llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
     if (addr->getZExtValue() < 0x8000) {
         // If regular memory, just read from memory
         auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
-                                             c.fn->getArg(2),
+                                             c.fn->getArg(MEMORY),
                                              {int_const(c, 0), addr});
         return load<uint8_t>(c, p);
     } else {
 
         // If mapped memory, perform a call to the bus object
-        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(1), addr});
+        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
         call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
             *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
         return call;
@@ -280,14 +282,14 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
     // If regular memory, just write to memory
     c.builder->SetInsertPoint(regular_memory_block);
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
-                                         c.fn->getArg(2),
+                                         c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
     store<uint8_t>(c, value, p);
     c.builder->CreateBr(continue_block);
 
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(mapped_memory_block);
-    auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(1), addr, value});
+    auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     c.builder->CreateBr(continue_block);
@@ -301,9 +303,7 @@ void add_cycle_counter(Context const& c, llvm::Value* value);
 void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 {
     store_pc(c, addr);
-    c.builder->CreateCall(c.call_function_fn, {c.fn->getArg(3), addr});
-
-    // add_cycle_counter(c, result);
+    c.builder->CreateCall(c.call_function_fn, {c.fn->getArg(EMULATOR), addr});
 
     // After the function call returns, we need to make sure that the PC points to the correct
     // location and so it is safe to continue
@@ -349,7 +349,7 @@ addr_mode_result_t addr_imm(Context const& c, bool, bool)
 {
     return {
         .addr = nullptr,
-        .op = read_1_byte_opcode(c),
+        .argument = read_1_byte_opcode(c),
         .cycles = int_const<uint64_t>(c, 1),
     };
 }
@@ -357,11 +357,11 @@ addr_mode_result_t addr_imm(Context const& c, bool, bool)
 addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
 {
     auto* const addr = read_2_byte_opcode(c);
-    auto* const op = dereference ? read_bus(c, addr) : nullptr;
+    auto* const argument = dereference ? read_bus(c, addr) : nullptr;
 
     return {
         .addr = addr,
-        .op = op,
+        .argument = argument,
         .cycles = int_const<uint64_t>(c, 3),
     };
 }
@@ -372,11 +372,11 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
     auto* const x_reg = load_reg(c, X);
     auto* const x_reg_16 = c.builder->CreateZExt(x_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, x_reg_16);
-    llvm::Value* op = nullptr;
+    llvm::Value* argument = nullptr;
     llvm::Value* extra_cycle;
 
     if (dereference) {
-        op = read_bus(c, effective_addr);
+        argument = read_bus(c, effective_addr);
     }
 
     if (force_extra_cycle) {
@@ -390,7 +390,7 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
 
     return {
         .addr = effective_addr,
-        .op = op,
+        .argument = argument,
         .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 3), extra_cycle),
     };
 }
@@ -402,11 +402,11 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_ext
     auto* const y_reg_16 = c.builder->CreateZExt(y_reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg_16);
 
-    llvm::Value* op = nullptr;
+    llvm::Value* argument = nullptr;
     llvm::Value* extra_cycle;
 
     if (dereference) {
-        op = read_bus(c, effective_addr);
+        argument = read_bus(c, effective_addr);
     }
 
     if (force_extra_cycle) {
@@ -419,7 +419,7 @@ addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_ext
 
     return {
         .addr = effective_addr,
-        .op = op,
+        .argument = argument,
         .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 3), extra_cycle),
     };
 }
@@ -436,11 +436,11 @@ addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
     auto* const ind_addr_lo = read_bus(c, zero_page_addr_16);
     auto* const ind_addr_hi = read_bus(c, zero_page_addr_p1_16);
     auto* const addr = assemble(c, ind_addr_lo, ind_addr_hi);
-    auto* const op = dereference ? read_bus(c, addr) : nullptr;
+    auto* const argument = dereference ? read_bus(c, addr) : nullptr;
 
     return {
         .addr = addr,
-        .op = op,
+        .argument = argument,
         .cycles = int_const<uint64_t>(c, 5),
     };
 }
@@ -458,11 +458,11 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
     auto* const y_reg = c.builder->CreateZExt(load_reg(c, Y), int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg);
 
-    llvm::Value* op = nullptr;
+    llvm::Value* argument = nullptr;
     llvm::Value* extra_cycle;
 
     if (dereference) {
-        op = read_bus(c, effective_addr);
+        argument = read_bus(c, effective_addr);
     }
 
     if (force_extra_cycle) {
@@ -475,7 +475,7 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
 
     return {
         .addr = effective_addr,
-        .op = op,
+        .argument = argument,
         .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 4), extra_cycle),
     };
 }
@@ -483,10 +483,10 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
 addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 {
     auto* const addr = c.builder->CreateZExt(read_1_byte_opcode(c), int_type<uint16_t>(c));
-    auto* const op = dereference ? read_bus(c, addr) : nullptr;
+    auto* const argument = dereference ? read_bus(c, addr) : nullptr;
     return {
         .addr = addr,
-        .op = op,
+        .argument = argument,
         .cycles = int_const<uint64_t>(c, 2),
     };
 }
@@ -497,10 +497,10 @@ addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
     auto* const x_reg = load_reg(c, X);
     auto* const addr = c.builder->CreateAdd(zero_page_base, x_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
-    auto* const op = dereference ? read_bus(c, addr_16) : nullptr;
+    auto* const argument = dereference ? read_bus(c, addr_16) : nullptr;
     return {
         .addr = addr_16,
-        .op = op,
+        .argument = argument,
         .cycles = int_const<uint64_t>(c, 3),
     };
 }
@@ -511,10 +511,10 @@ addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference, bool)
     auto* const y_reg = load_reg(c, Y);
     auto* const addr = c.builder->CreateAdd(zero_page_base, y_reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
-    auto* const op = dereference ? read_bus(c, addr_16) : nullptr;
+    auto* const argument = dereference ? read_bus(c, addr_16) : nullptr;
     return {
         .addr = addr_16,
-        .op = op,
+        .argument = argument,
         .cycles = int_const<uint64_t>(c, 3),
     };
 }
@@ -622,9 +622,9 @@ void store_sr(Context const& c, llvm::Value* value)
 
 llvm::Value* bin_logic_op(Context const& c, build_bin_fn_t bin_fn, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
     auto* const a_reg = load_reg(c, A);
-    auto* const result = std::invoke(bin_fn, c.builder, a_reg, op, "");
+    auto* const result = std::invoke(bin_fn, c.builder, a_reg, argument, "");
     store_reg(c, A, result);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -659,10 +659,10 @@ using shift_fn_t = std::pair<llvm::Value*, llvm::Value*> (*)(Context const& c,
 
 llvm::Value* shift_mem_op(Context const& c, shift_fn_t fn, bool roll, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, true);
+    auto const [addr, argument, cycles] = addr_mode(c, true, true);
     auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, C))
                                 : static_cast<llvm::Value*>(int_const(c, false));
-    auto const [result, carry_flag] = fn(c, op, shift_in);
+    auto const [result, carry_flag] = fn(c, argument, shift_in);
     store_flag(c, C, carry_flag);
     write_bus(c, addr, result);
     set_n_z(c, result);
@@ -715,11 +715,11 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
 
 llvm::Value* cmp_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
     auto* const reg = load_reg(c, reg_offset);
-    auto* const result = c.builder->CreateSub(reg, op);
+    auto* const result = c.builder->CreateSub(reg, argument);
 
-    store_flag(c, C, c.builder->CreateICmp(llvm::CmpInst::Predicate::ICMP_ULE, op, reg));
+    store_flag(c, C, c.builder->CreateICmp(llvm::CmpInst::Predicate::ICMP_ULE, argument, reg));
     set_n_z(c, result);
 
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -748,9 +748,9 @@ llvm::Value* set_flag_op(Context const& c, FlagOffset flag_offset, bool value)
 
 llvm::Value* inc_dec_mem_op(Context const& c, addr_fn_t addr_mode, bool increase)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
-    auto* const result = increase ? c.builder->CreateAdd(op, int_const(c, 1_b))
-                                  : c.builder->CreateSub(op, int_const(c, 1_b));
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
+    auto* const result = increase ? c.builder->CreateAdd(argument, int_const(c, 1_b))
+                                  : c.builder->CreateSub(argument, int_const(c, 1_b));
     write_bus(c, addr, result);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 3)));
@@ -770,7 +770,7 @@ llvm::Value* inc_dec_reg_op(Context const& c, RegOffset reg_offset, bool increas
 
 llvm::Value* store_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, false, true);
+    auto const [addr, argument, cycles] = addr_mode(c, false, true);
     auto* const reg = load_reg(c, reg_offset);
     write_bus(c, addr, reg);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -779,18 +779,18 @@ llvm::Value* store_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mod
 
 llvm::Value* load_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
-    store_reg(c, reg_offset, op);
-    set_n_z(c, op);
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
+    store_reg(c, reg_offset, argument);
+    set_n_z(c, argument);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
 }
 
 llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
     auto* const fn = add ? c.add_fn : c.sub_fn;
-    auto* const call = c.builder->CreateCall(fn, {c.fn->getArg(0), op});
+    auto* const call = c.builder->CreateCall(fn, {c.fn->getArg(CPU), argument});
     call->setCallingConv(llvm::CallingConv::Fast);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
@@ -798,18 +798,18 @@ llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 
 llvm::Value* BIT_op(Context const& c, addr_fn_t addr_mode)
 {
-    auto const [addr, op, cycles] = addr_mode(c, true, false);
+    auto const [addr, argument, cycles] = addr_mode(c, true, false);
 
-    auto* const n_bit = c.builder->CreateAnd(op, int_const(c, 0x80_b));
+    auto* const n_bit = c.builder->CreateAnd(argument, int_const(c, 0x80_b));
     auto* const new_n =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_NE, n_bit, int_const(c, 0_b));
 
-    auto* const v_bit = c.builder->CreateAnd(op, int_const(c, 0x40_b));
+    auto* const v_bit = c.builder->CreateAnd(argument, int_const(c, 0x40_b));
     auto* const new_v =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_NE, v_bit, int_const(c, 0_b));
 
     auto* const a_reg = load_reg(c, A);
-    auto* const a_masked = c.builder->CreateAnd(a_reg, op);
+    auto* const a_masked = c.builder->CreateAnd(a_reg, argument);
     auto* const new_z =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, a_masked, int_const(c, 0_b));
 
@@ -1304,7 +1304,10 @@ auto* create_add_sub_fn(Context const& c, bool add)
 {
     auto* fn_type =
         llvm::FunctionType::get(llvm::Type::getVoidTy(*c.context),
-                                {llvm::PointerType::get(*c.context, 0), int_type<uint8_t>(c)},
+                                {
+                                    llvm::PointerType::get(*c.context, 0) /* CPU* cpu */,
+                                    int_type<uint8_t>(c) /* byte_t argument*/,
+                                },
                                 false);
     auto* fn = llvm::Function::Create(
         fn_type, llvm::Function::LinkageTypes::PrivateLinkage, add ? "add_fn" : "sub_fn", c.module);
@@ -1324,19 +1327,20 @@ auto* create_add_sub_fn(Context const& c, bool add)
     auto* const d_flag = load_flag(new_context, D);
     auto* const not_decimal =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, d_flag, int_const(c, false));
-    auto* const arg_comp = c.builder->CreateNot(fn->getArg(1));
+    auto* const argument = fn->getArg(1);
+    auto* const arg_comp = c.builder->CreateNot(argument);
     c.builder->CreateCondBr(not_decimal, binary_block, decimal_block);
 
     if (add) {
         c.builder->SetInsertPoint(binary_block);
-        create_bin_add_fn(new_context, a_reg, fn->getArg(1));
+        create_bin_add_fn(new_context, a_reg, argument);
         c.builder->SetInsertPoint(decimal_block);
-        create_dec_add_fn(new_context, a_reg, fn->getArg(1));
+        create_dec_add_fn(new_context, a_reg, argument);
     } else {
         c.builder->SetInsertPoint(binary_block);
         create_bin_add_fn(new_context, a_reg, arg_comp);
         c.builder->SetInsertPoint(decimal_block);
-        create_dec_sub_fn(new_context, a_reg, fn->getArg(1));
+        create_dec_sub_fn(new_context, a_reg, argument);
     }
 
     return fn;
@@ -1369,12 +1373,15 @@ auto* create_cpu_struct_type(llvm::LLVMContext& context)
 
 auto* create_jit_function_type(llvm::LLVMContext& context)
 {
-    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
-                                            {llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0)},
-                                            false);
+    auto* fn_type =
+        llvm::FunctionType::get(int_type<uint64_t>(context),
+                                {
+                                    llvm::PointerType::get(context, 0) /* CPU* cpu */,
+                                    llvm::PointerType::get(context, 0) /* Bus* bus */,
+                                    llvm::PointerType::get(context, 0) /* byte_t* mem */,
+                                    llvm::PointerType::get(context, 0) /* Emulator* em */,
+                                },
+                                false);
     return fn_type;
 }
 
@@ -1400,19 +1407,23 @@ auto* create_addr_mode_function_type(llvm::LLVMContext& context)
 
 auto* create_bus_read_function_type(llvm::LLVMContext& context)
 {
-    auto* fn_type =
-        llvm::FunctionType::get(int_type<uint8_t>(context),
-                                {llvm::PointerType::get(context, 0), int_type<uint16_t>(context)},
-                                false);
+    auto* fn_type = llvm::FunctionType::get(int_type<uint8_t>(context),
+                                            {
+                                                llvm::PointerType::get(context, 0) /* Bus* bus */,
+                                                int_type<uint16_t>(context) /* word_t addr */,
+                                            },
+                                            false);
     return fn_type;
 }
 
 auto* create_bus_write_function_type(llvm::LLVMContext& context)
 {
     auto* fn_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
-                                            {llvm::PointerType::get(context, 0),
-                                             int_type<uint16_t>(context),
-                                             int_type<uint8_t>(context)},
+                                            {
+                                                llvm::PointerType::get(context, 0) /* Bus* bus */,
+                                                int_type<uint16_t>(context) /* word_t addr */,
+                                                int_type<uint8_t>(context) /* byte_t data */,
+                                            },
                                             false);
     return fn_type;
 }
@@ -1421,7 +1432,10 @@ auto* create_call_function_function_type(llvm::LLVMContext& context)
 {
     auto* fn_type =
         llvm::FunctionType::get(int_type<uint64_t>(context),
-                                {llvm::PointerType::get(context, 0), int_type<uint16_t>(context)},
+                                {
+                                    llvm::PointerType::get(context, 0) /* Emulator* em */,
+                                    int_type<uint16_t>(context) /* word_t addr */,
+                                },
                                 false);
     return fn_type;
 }
@@ -1506,7 +1520,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 {
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
-    auto module = std::make_unique<llvm::Module>("test_module", *context);
+    auto module =
+        std::make_unique<llvm::Module>(fmt::format("module_{:04x}", flow.begin()->first), *context);
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
     auto* cpu_struct = create_cpu_struct_type(*context);
@@ -1595,7 +1610,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
             auto const inst_repr = instruction.get_16bit_representation();
             auto* const p =
                 builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(ctx), 0x10000),
-                                   ctx.fn->getArg(2),
+                                   ctx.fn->getArg(MEMORY),
                                    {int_const(ctx, 0), int_const(ctx, instruction.pc)});
             auto* const load_inst_repr = unaligned_load<uint16_t>(ctx, p);
             auto const mask = word_t{self_mod_table[static_cast<size_t>(instruction.bytes[0])]};

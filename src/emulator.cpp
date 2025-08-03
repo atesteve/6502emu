@@ -148,7 +148,7 @@ uint64_t Emulator::call_function(word_t addr)
     auto const index = static_cast<size_t>(addr);
     jit_fn_t const cache_fn = _jit_functions_cache[index];
     if (cache_fn != nullptr) {
-        auto const ret = cache_fn(_cpu, _bus, _bus.memory_space.data(), *this);
+        auto const ret = cache_fn(&_cpu, &_bus, _bus.memory_space.data(), this);
         _jit_clock_counter += ret;
         return ret;
     }
