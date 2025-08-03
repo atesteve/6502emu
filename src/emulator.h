@@ -42,6 +42,9 @@ private:
     std::vector<std::atomic<jit_fn_t>> _jit_functions_cache;
     std::unique_ptr<llvm::ThreadPoolInterface> _thread_pool{};
     std::atomic_int _jit_counter{0};
+    std::unique_ptr<llvm::orc::LLJIT> _jit;
+    llvm::orc::ThreadSafeContext _base_context;
+    std::unique_ptr<llvm::Module> _base_module;
     int _optimization_level;
 };
 

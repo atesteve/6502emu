@@ -13,9 +13,9 @@ endif()
 
 add_compile_options(-Wall -Wextra -pedantic)
 add_compile_options(-g3)
-#add_compile_options(-pg)
 add_link_options(-g3)
-#add_link_options(-pg)
+add_compile_options(-fsanitize=address)
+add_link_options(-fsanitize=address)
 
 set(SOURCES
     src/instruction.cpp

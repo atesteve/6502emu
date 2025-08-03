@@ -6,6 +6,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 
+#include <llvm/Transforms/Utils/Cloning.h>
 #include <spdlog/spdlog.h>
 #include <fmt/chrono.h>
 
@@ -19,7 +20,6 @@ llvm::ExitOnError exit_on_error;
 
 struct JitFn {
     llvm::orc::ThreadSafeContext llvm_context = std::make_unique<llvm::LLVMContext>();
-    std::unique_ptr<llvm::orc::LLJIT> jit = exit_on_error(emu::make_jit());
     std::map<word_t, control_block> flow;
     std::unique_ptr<llvm::Module> module;
 };
@@ -101,7 +101,7 @@ void Emulator::jit_function(word_t addr)
         async([=, this] { jit_function(call_addr); });
     }
 
-    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow);
+    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_context, *_base_module);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
     emu::optimize(*jit_fn.module,
@@ -113,11 +113,14 @@ void Emulator::jit_function(word_t addr)
 
     auto const finish_optimize = std::chrono::steady_clock::now();
 
-    exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));
+    auto const fn_addr = [&] {
+        auto lock = _base_context.getLock();
+        exit_on_error(emu::materialize(*_jit, jit_fn.llvm_context, std::move(jit_fn.module)));
+        return exit_on_error(_jit->lookup(fmt::format("fn_{:04x}", addr)));
+    }();
 
-    auto const fn_addr = exit_on_error(jit_fn.jit->lookup(fmt::format("fn_{:04x}", addr)));
     auto const finish_materialize = std::chrono::steady_clock::now();
-    auto* const fn = reinterpret_cast<jit_fn_t>(fn_addr.getValue());
+    auto* const fn = fn_addr.toPtr<jit_fn_t>();
 
     _jit_functions_cache[index] = fn;
     ++_jit_counter;
@@ -174,6 +177,17 @@ void Emulator::initialize(std::string_view image_file, word_t load_address, word
 
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
+
+    _jit = exit_on_error(emu::make_jit());
+
+    _base_context = std::make_unique<llvm::LLVMContext>();
+    _base_module = emu::build_base(_base_context);
+    emu::optimize(*_base_module,
+                  std::array{llvm::OptimizationLevel::O0,
+                             llvm::OptimizationLevel::O1,
+                             llvm::OptimizationLevel::O2,
+                             llvm::OptimizationLevel::O3}
+                      .at(_optimization_level));
 
     jit_function(entry_point);
     _thread_pool->wait();

@@ -11,7 +11,11 @@
 namespace emu {
 
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext context,
-                                      std::map<word_t, control_block> const& flow);
+                                      std::map<word_t, control_block> const& flow,
+                                      llvm::orc::ThreadSafeContext base_context,
+                                      llvm::Module& base_module);
+
+std::unique_ptr<llvm::Module> build_base(llvm::orc::ThreadSafeContext tsc);
 
 void optimize(llvm::Module& module, llvm::OptimizationLevel level);
 

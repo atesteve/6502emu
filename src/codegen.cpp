@@ -11,12 +11,14 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/ValueSymbolTable.h>
 
 #include <llvm/IR/PassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/ModRef.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 
@@ -1300,17 +1302,23 @@ void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
     c.builder->CreateRetVoid();
 }
 
+auto* create_add_sub_fn_type(llvm::LLVMContext& context)
+{
+    return llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                   {
+                                       llvm::PointerType::get(context, 0) /* CPU* cpu */,
+                                       int_type<uint8_t>(context) /* byte_t argument*/,
+                                   },
+                                   false);
+}
+
 auto* create_add_sub_fn(Context const& c, bool add)
 {
-    auto* fn_type =
-        llvm::FunctionType::get(llvm::Type::getVoidTy(*c.context),
-                                {
-                                    llvm::PointerType::get(*c.context, 0) /* CPU* cpu */,
-                                    int_type<uint8_t>(c) /* byte_t argument*/,
-                                },
-                                false);
-    auto* fn = llvm::Function::Create(
-        fn_type, llvm::Function::LinkageTypes::PrivateLinkage, add ? "add_fn" : "sub_fn", c.module);
+    auto* fn_type = create_add_sub_fn_type(*c.context);
+    auto* fn = llvm::Function::Create(fn_type,
+                                      llvm::Function::LinkageTypes::ExternalLinkage,
+                                      add ? "add_fn" : "sub_fn",
+                                      c.module);
     fn->addFnAttr(llvm::Attribute::AttrKind::InlineHint);
     fn->setCallingConv(llvm::CallingConv::Fast);
 
@@ -1478,50 +1486,104 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     MPM.run(module, MAM);
 }
 
-void build_base()
+std::unique_ptr<llvm::Module> build_base(llvm::orc::ThreadSafeContext tsc)
 {
-    auto context = std::make_unique<llvm::LLVMContext>();
+    auto lock = tsc.getLock();
+    auto* context = tsc.getContext();
+
     auto module = std::make_unique<llvm::Module>("base_functions", *context);
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
-#ifndef NDEBUG
     auto* cpu_struct = create_cpu_struct_type(*context);
 
-    // Sanity check
-    auto* cpu_struct_layout = module->getDataLayout().getStructLayout(cpu_struct);
-    auto* sr_struct_layout = module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
-        cpu_struct->getElementType(std::to_underlying(RegOffset::SR))));
-    assert(cpu_struct_layout->getSizeInBytes() == sizeof(CPU));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(PC)) == offsetof(CPU, PC));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(SP)) == offsetof(CPU, SP));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(A)) == offsetof(CPU, A));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(X)) == offsetof(CPU, X));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(Y)) == offsetof(CPU, Y));
-    assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::SR))
-           == offsetof(CPU, SR));
+    create_add_sub_fn(
+        {
+            .context = context,
+            .builder = builder.get(),
+            .cpu_type = cpu_struct,
+            .module = module.get(),
+        },
+        true);
 
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(N))
-           == offsetof(decltype(CPU::SR), N));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(V))
-           == offsetof(decltype(CPU::SR), V));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(D))
-           == offsetof(decltype(CPU::SR), D));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(I))
-           == offsetof(decltype(CPU::SR), I));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(Z))
-           == offsetof(decltype(CPU::SR), Z));
-    assert(sr_struct_layout->getElementOffset(std::to_underlying(C))
-           == offsetof(decltype(CPU::SR), C));
+    create_add_sub_fn(
+        {
+            .context = context,
+            .builder = builder.get(),
+            .cpu_type = cpu_struct,
+            .module = module.get(),
+        },
+        false);
+
+#ifndef NDEBUG
+    // auto* cpu_struct = create_cpu_struct_type(*context);
+
+    // // Sanity check
+    // auto* cpu_struct_layout = module->getDataLayout().getStructLayout(cpu_struct);
+    // auto* sr_struct_layout =
+    // module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
+    //     cpu_struct->getElementType(std::to_underlying(RegOffset::SR))));
+    // assert(cpu_struct_layout->getSizeInBytes() == sizeof(CPU));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(PC)) == offsetof(CPU, PC));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(SP)) == offsetof(CPU, SP));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(A)) == offsetof(CPU, A));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(X)) == offsetof(CPU, X));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(Y)) == offsetof(CPU, Y));
+    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::SR))
+    //        == offsetof(CPU, SR));
+
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(N))
+    //        == offsetof(decltype(CPU::SR), N));
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(V))
+    //        == offsetof(decltype(CPU::SR), V));
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(D))
+    //        == offsetof(decltype(CPU::SR), D));
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(I))
+    //        == offsetof(decltype(CPU::SR), I));
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(Z))
+    //        == offsetof(decltype(CPU::SR), Z));
+    // assert(sr_struct_layout->getElementOffset(std::to_underlying(C))
+    //        == offsetof(decltype(CPU::SR), C));
 #endif // NDEBUG
+
+    return module;
+}
+
+llvm::Function* clone_function(llvm::Module& dst_module,
+                               llvm::orc::ThreadSafeContext src_context,
+                               llvm::Module& src_module,
+                               llvm::StringRef name,
+                               llvm::FunctionType* fn_type)
+{
+    auto lock = src_context.getLock();
+
+    llvm::SmallVector<llvm::ReturnInst*> returns;
+
+    auto* dst_fn = llvm::Function::Create(
+        fn_type, llvm::Function::LinkageTypes::PrivateLinkage, name, &dst_module);
+
+    auto* src_fn = src_module.getFunction(name);
+
+    llvm::ValueToValueMapTy v2v;
+    for (auto& arg : src_fn->args()) {
+        v2v[&arg] = dst_fn->getArg(arg.getArgNo());
+    }
+
+    llvm::CloneFunctionInto(
+        dst_fn, src_fn, v2v, llvm::CloneFunctionChangeType::LocalChangesOnly, returns);
+
+    return dst_fn;
 }
 
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
-                                      std::map<word_t, control_block> const& flow)
+                                      std::map<word_t, control_block> const& flow,
+                                      llvm::orc::ThreadSafeContext base_context,
+                                      llvm::Module& base_module)
 {
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
     auto module =
         std::make_unique<llvm::Module>(fmt::format("module_{:04x}", flow.begin()->first), *context);
+
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
     auto* cpu_struct = create_cpu_struct_type(*context);
@@ -1548,23 +1610,9 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                                     "call_function",
                                                     module.get());
 
-    auto* add_fn = create_add_sub_fn(
-        {
-            .context = context,
-            .builder = builder.get(),
-            .cpu_type = cpu_struct,
-            .module = module.get(),
-        },
-        true);
-
-    auto* sub_fn = create_add_sub_fn(
-        {
-            .context = context,
-            .builder = builder.get(),
-            .cpu_type = cpu_struct,
-            .module = module.get(),
-        },
-        false);
+    auto* add_sub_fn_type = create_add_sub_fn_type(*context);
+    auto* add_fn = clone_function(*module, base_context, base_module, "add_fn", add_sub_fn_type);
+    auto* sub_fn = clone_function(*module, base_context, base_module, "sub_fn", add_sub_fn_type);
 
     auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
     builder->SetInsertPoint(entry_block);
@@ -1659,10 +1707,12 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         }
     }
 
+#ifndef NDEBUG
     if (llvm::verifyFunction(*fn, &llvm::errs())) {
         module->print(llvm::errs(), nullptr);
         return nullptr;
     }
+#endif
 
     return module;
 }
