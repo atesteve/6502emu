@@ -19,7 +19,8 @@ llvm::ExitOnError exit_on_error;
 } // namespace
 
 struct JitFn {
-    llvm::orc::ThreadSafeContext llvm_context = std::make_unique<llvm::LLVMContext>();
+    llvm::orc::ThreadSafeContext llvm_context;
+    std::unique_ptr<llvm::orc::LLJIT> jit;
     std::map<word_t, control_block> flow;
     std::unique_ptr<llvm::Module> module;
 };
@@ -92,16 +93,14 @@ void Emulator::jit_function(word_t addr)
     auto const finish_control_flow = std::chrono::steady_clock::now();
 
     for (auto call_addr : function_calls) {
-        {
-            std::lock_guard lock{_map_mutex};
-            if (_jit_functions[static_cast<size_t>(call_addr)] != nullptr) {
-                continue;
-            }
+        if (get_jit_fn(call_addr) != nullptr) {
+            continue;
         }
-        async([=, this] { jit_function(call_addr); });
+        async([this, call_addr] { jit_function(call_addr); });
     }
 
-    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_context, *_base_module);
+    jit_fn.llvm_context = std::make_unique<llvm::LLVMContext>();
+    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_module_bitcode);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
     emu::optimize(*jit_fn.module,
@@ -113,10 +112,10 @@ void Emulator::jit_function(word_t addr)
 
     auto const finish_optimize = std::chrono::steady_clock::now();
 
+    jit_fn.jit = exit_on_error(emu::make_jit());
     auto const fn_addr = [&] {
-        auto lock = _base_context.getLock();
-        exit_on_error(emu::materialize(*_jit, jit_fn.llvm_context, std::move(jit_fn.module)));
-        return exit_on_error(_jit->lookup(fmt::format("fn_{:04x}", addr)));
+        exit_on_error(emu::materialize(*jit_fn.jit, jit_fn.llvm_context, std::move(jit_fn.module)));
+        return exit_on_error(jit_fn.jit->lookup(fmt::format("fn_{:04x}", addr)));
     }();
 
     auto const finish_materialize = std::chrono::steady_clock::now();
@@ -178,17 +177,11 @@ void Emulator::initialize(std::string_view image_file, word_t load_address, word
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
 
-    _jit = exit_on_error(emu::make_jit());
-
-    _base_context = std::make_unique<llvm::LLVMContext>();
-    _base_module = emu::build_base(_base_context);
-    emu::optimize(*_base_module,
-                  std::array{llvm::OptimizationLevel::O0,
-                             llvm::OptimizationLevel::O1,
-                             llvm::OptimizationLevel::O2,
-                             llvm::OptimizationLevel::O3}
-                      .at(_optimization_level));
-
+    _base_module_bitcode = build_base(std::array{llvm::OptimizationLevel::O0,
+                                                 llvm::OptimizationLevel::O1,
+                                                 llvm::OptimizationLevel::O2,
+                                                 llvm::OptimizationLevel::O3}
+                                          .at(_optimization_level));
     jit_function(entry_point);
     _thread_pool->wait();
 }

@@ -112,19 +112,18 @@ protected:
     std::unique_ptr<llvm::orc::LLJIT> _jit;
     emu::CPU _cpu{};
     emu::Bus _bus{};
-    emu::Emulator _em{3};
+    emu::Emulator _em{0};
 };
 
 TEST_P(TestJitCodegen, Test)
 {
-    auto const op_level = llvm::OptimizationLevel::O3;
+    auto const op_level = llvm::OptimizationLevel::O0;
 
-    auto base_module = emu::build_base(_context);
-    emu::optimize(*base_module, op_level);
+    auto base_module = emu::build_base(op_level);
 
     auto const& params = this->GetParam();
     auto const control_flow = emu::build_control_flow(_bus, _cpu.PC);
-    auto module = emu::codegen(_context, control_flow, _context, *base_module);
+    auto module = emu::codegen(_context, control_flow, base_module);
     ASSERT_TRUE(module);
     emu::optimize(*module, op_level);
     auto err = emu::materialize(*_jit, _context, std::move(module));

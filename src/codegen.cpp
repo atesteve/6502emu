@@ -12,13 +12,16 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/ValueSymbolTable.h>
-
 #include <llvm/IR/PassManager.h>
+
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/ModRef.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+
+#include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Bitcode/BitcodeWriter.h>
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 
@@ -36,6 +39,7 @@ using namespace emu::literals;
 
 namespace emu {
 namespace {
+llvm::ExitOnError exit_on_error;
 
 constexpr word_t VECTOR_BRK_LO = 0xfffe_w;
 constexpr word_t VECTOR_BRK_HI = 0xffff_w;
@@ -1486,8 +1490,9 @@ void optimize(llvm::Module& module, llvm::OptimizationLevel opt_level)
     MPM.run(module, MAM);
 }
 
-std::unique_ptr<llvm::Module> build_base(llvm::orc::ThreadSafeContext tsc)
+std::string build_base(llvm::OptimizationLevel opt_level)
 {
+    llvm::orc::ThreadSafeContext tsc = std::make_unique<llvm::LLVMContext>();
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
 
@@ -1514,105 +1519,61 @@ std::unique_ptr<llvm::Module> build_base(llvm::orc::ThreadSafeContext tsc)
         },
         false);
 
-#ifndef NDEBUG
-    // auto* cpu_struct = create_cpu_struct_type(*context);
+    optimize(*module, opt_level);
 
-    // // Sanity check
-    // auto* cpu_struct_layout = module->getDataLayout().getStructLayout(cpu_struct);
-    // auto* sr_struct_layout =
-    // module->getDataLayout().getStructLayout(static_cast<llvm::StructType*>(
-    //     cpu_struct->getElementType(std::to_underlying(RegOffset::SR))));
-    // assert(cpu_struct_layout->getSizeInBytes() == sizeof(CPU));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(PC)) == offsetof(CPU, PC));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(SP)) == offsetof(CPU, SP));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(A)) == offsetof(CPU, A));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(X)) == offsetof(CPU, X));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(Y)) == offsetof(CPU, Y));
-    // assert(cpu_struct_layout->getElementOffset(std::to_underlying(RegOffset::SR))
-    //        == offsetof(CPU, SR));
+    std::string ret;
+    llvm::raw_string_ostream ostream{ret};
+    llvm::BitcodeWriter writer{ostream};
+    writer.writeModule(*module);
+    writer.writeSymtab();
+    writer.writeStrtab();
 
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(N))
-    //        == offsetof(decltype(CPU::SR), N));
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(V))
-    //        == offsetof(decltype(CPU::SR), V));
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(D))
-    //        == offsetof(decltype(CPU::SR), D));
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(I))
-    //        == offsetof(decltype(CPU::SR), I));
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(Z))
-    //        == offsetof(decltype(CPU::SR), Z));
-    // assert(sr_struct_layout->getElementOffset(std::to_underlying(C))
-    //        == offsetof(decltype(CPU::SR), C));
-#endif // NDEBUG
-
-    return module;
+    return ret;
 }
 
-llvm::Function* clone_function(llvm::Module& dst_module,
-                               llvm::orc::ThreadSafeContext src_context,
-                               llvm::Module& src_module,
-                               llvm::StringRef name,
-                               llvm::FunctionType* fn_type)
+std::unique_ptr<llvm::Module> parse_bitcode(llvm::LLVMContext* context,
+                                            std::string_view module_name,
+                                            std::string const& bitcode)
 {
-    auto lock = src_context.getLock();
-
-    llvm::SmallVector<llvm::ReturnInst*> returns;
-
-    auto* dst_fn = llvm::Function::Create(
-        fn_type, llvm::Function::LinkageTypes::PrivateLinkage, name, &dst_module);
-
-    auto* src_fn = src_module.getFunction(name);
-
-    llvm::ValueToValueMapTy v2v;
-    for (auto& arg : src_fn->args()) {
-        v2v[&arg] = dst_fn->getArg(arg.getArgNo());
+    auto module = llvm::parseBitcodeFile({bitcode, module_name}, *context);
+    auto ret = exit_on_error(std::move(module));
+    for (auto& fn : *ret) {
+        fn.setLinkage(llvm::Function::LinkageTypes::InternalLinkage);
     }
-
-    llvm::CloneFunctionInto(
-        dst_fn, src_fn, v2v, llvm::CloneFunctionChangeType::LocalChangesOnly, returns);
-
-    return dst_fn;
+    return ret;
 }
 
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                       std::map<word_t, control_block> const& flow,
-                                      llvm::orc::ThreadSafeContext base_context,
-                                      llvm::Module& base_module)
+                                      std::string const& base_module_bitcode)
 {
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
-    auto module =
-        std::make_unique<llvm::Module>(fmt::format("module_{:04x}", flow.begin()->first), *context);
+    auto module = parse_bitcode(
+        context, fmt::format("module_{:04x}", flow.begin()->first), base_module_bitcode);
 
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
-    auto* cpu_struct = create_cpu_struct_type(*context);
+    auto* read_bus_fn = llvm::Function::Create(create_bus_read_function_type(*context),
+                                               llvm::Function::LinkageTypes::ExternalLinkage,
+                                               "read_bus",
+                                               module.get());
+
+    auto* write_bus_fn = llvm::Function::Create(create_bus_write_function_type(*context),
+                                                llvm::Function::LinkageTypes::ExternalLinkage,
+                                                "write_bus",
+                                                module.get());
+
+    auto* call_function_fn = llvm::Function::Create(create_call_function_function_type(*context),
+                                                    llvm::Function::LinkageTypes::ExternalLinkage,
+                                                    "call_function",
+                                                    module.get());
 
     auto* fn_type = create_jit_function_type(*context);
     auto* fn = llvm::Function::Create(fn_type,
                                       llvm::Function::LinkageTypes::ExternalLinkage,
                                       fmt::format("fn_{:04x}", flow.begin()->first),
                                       module.get());
-
-    auto* read_bus_fn_type = create_bus_read_function_type(*context);
-    auto* read_bus_fn = llvm::Function::Create(
-        read_bus_fn_type, llvm::Function::LinkageTypes::ExternalLinkage, "read_bus", module.get());
-
-    auto* write_bus_fn_type = create_bus_write_function_type(*context);
-    auto* write_bus_fn = llvm::Function::Create(write_bus_fn_type,
-                                                llvm::Function::LinkageTypes::ExternalLinkage,
-                                                "write_bus",
-                                                module.get());
-
-    auto* call_function_fn_type = create_call_function_function_type(*context);
-    auto* call_function_fn = llvm::Function::Create(call_function_fn_type,
-                                                    llvm::Function::LinkageTypes::ExternalLinkage,
-                                                    "call_function",
-                                                    module.get());
-
-    auto* add_sub_fn_type = create_add_sub_fn_type(*context);
-    auto* add_fn = clone_function(*module, base_context, base_module, "add_fn", add_sub_fn_type);
-    auto* sub_fn = clone_function(*module, base_context, base_module, "sub_fn", add_sub_fn_type);
 
     auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
     builder->SetInsertPoint(entry_block);
@@ -1634,12 +1595,12 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     Context ctx{
         .context = context,
         .builder = builder.get(),
-        .cpu_type = cpu_struct,
+        .cpu_type = create_cpu_struct_type(*context),
         .fn = fn,
         .read_bus_fn = read_bus_fn,
         .write_bus_fn = write_bus_fn,
-        .add_fn = add_fn,
-        .sub_fn = sub_fn,
+        .add_fn = module->getFunction("add_fn"),
+        .sub_fn = module->getFunction("sub_fn"),
         .call_function_fn = call_function_fn,
         .cycle_counter_ptr = cycle_counter,
         .aux_8b_ptr = aux_8b,
