@@ -17,6 +17,7 @@
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/ModRef.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
@@ -222,8 +223,30 @@ void return_function(Context const& c, llvm::Value* pc_value)
     c.builder->CreateRet(cycles);
 }
 
+llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
+{
+    if (addr->getZExtValue() < 0x8000) {
+        // If regular memory, just read from memory
+        auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
+                                             c.fn->getArg(MEMORY),
+                                             {int_const(c, 0), addr});
+        return load<uint8_t>(c, p);
+    } else {
+
+        // If mapped memory, perform a call to the bus object
+        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
+        call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+            *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+        return call;
+    }
+}
+
 llvm::Value* read_bus(Context const& c, llvm::Value* addr)
 {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
+        return read_bus(c, const_addr);
+    }
+
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
@@ -256,26 +279,26 @@ llvm::Value* read_bus(Context const& c, llvm::Value* addr)
     return load<uint8_t>(c, c.aux_8b_ptr);
 }
 
-llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
+void write_bus(Context const& c, llvm::ConstantInt* addr, llvm::Value* value)
 {
     if (addr->getZExtValue() < 0x8000) {
-        // If regular memory, just read from memory
         auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                              c.fn->getArg(MEMORY),
                                              {int_const(c, 0), addr});
-        return load<uint8_t>(c, p);
+        store<uint8_t>(c, value, p);
     } else {
-
-        // If mapped memory, perform a call to the bus object
-        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
+        auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
         call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
             *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-        return call;
     }
 }
 
 void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
 {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
+        return write_bus(c, const_addr, value);
+    }
+
     auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
     auto* const eq_0 =
         c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
@@ -317,13 +340,13 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     auto* const current_pc = load_pc(c);
     auto* const eq = c.builder->CreateCmp(
         llvm::CmpInst::Predicate::ICMP_EQ, current_pc, int_const(c, next_addr));
-    // Hint the optimizer that the most common outcome is that the PC is correct.
 
     auto* const block_eq =
         llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_eq", next_addr), c.fn);
     auto* const block_ne =
         llvm::BasicBlock::Create(*c.context, fmt::format("chk_call_{:04x}_ne", next_addr), c.fn);
 
+    // Hint the optimizer that the most common outcome is that the PC is correct.
     c.builder->CreateCondBr(expect(c, eq, true), block_eq, block_ne);
 
     // If the PC after return does not match the expected PC, return
