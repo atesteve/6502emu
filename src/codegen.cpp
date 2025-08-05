@@ -372,12 +372,14 @@ addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
     };
 }
 
-addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_extra_cycle)
+addr_mode_result_t
+    addr_abs_XY(Context const& c, bool dereference, bool force_extra_cycle, RegOffset reg_offset)
 {
     auto* const base_addr = read_2_byte_opcode(c);
-    auto* const x_reg = load_reg(c, X);
-    auto* const x_reg_16 = c.builder->CreateZExt(x_reg, int_type<uint16_t>(c));
-    auto* const effective_addr = c.builder->CreateAdd(base_addr, x_reg_16);
+    auto* const reg = load_reg(c, reg_offset);
+    auto* const reg_16 = c.builder->CreateZExt(reg, int_type<uint16_t>(c));
+    auto* const effective_addr = c.builder->CreateAdd(base_addr, reg_16);
+
     llvm::Value* argument = nullptr;
     llvm::Value* extra_cycle;
 
@@ -388,7 +390,6 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
     if (force_extra_cycle) {
         extra_cycle = int_const<uint64_t>(c, 1);
     } else {
-
         auto* const in_same_page = same_page(c, effective_addr, base_addr);
         auto* const not_in_same_page = c.builder->CreateNot(in_same_page);
         extra_cycle = c.builder->CreateZExt(not_in_same_page, int_type<uint64_t>(c));
@@ -401,33 +402,14 @@ addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_ext
     };
 }
 
+addr_mode_result_t addr_abs_X(Context const& c, bool dereference, bool force_extra_cycle)
+{
+    return addr_abs_XY(c, dereference, force_extra_cycle, X);
+}
+
 addr_mode_result_t addr_abs_Y(Context const& c, bool dereference, bool force_extra_cycle)
 {
-    auto* const base_addr = read_2_byte_opcode(c);
-    auto* const y_reg = load_reg(c, Y);
-    auto* const y_reg_16 = c.builder->CreateZExt(y_reg, int_type<uint16_t>(c));
-    auto* const effective_addr = c.builder->CreateAdd(base_addr, y_reg_16);
-
-    llvm::Value* argument = nullptr;
-    llvm::Value* extra_cycle;
-
-    if (dereference) {
-        argument = read_bus(c, effective_addr);
-    }
-
-    if (force_extra_cycle) {
-        extra_cycle = int_const<uint64_t>(c, 1);
-    } else {
-        auto* const in_same_page = same_page(c, effective_addr, base_addr);
-        auto* const not_in_same_page = c.builder->CreateNot(in_same_page);
-        extra_cycle = c.builder->CreateZExt(not_in_same_page, int_type<uint64_t>(c));
-    }
-
-    return {
-        .addr = effective_addr,
-        .argument = argument,
-        .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 3), extra_cycle),
-    };
+    return addr_abs_XY(c, dereference, force_extra_cycle, Y);
 }
 
 addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
@@ -497,11 +479,11 @@ addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
     };
 }
 
-addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
+addr_mode_result_t addr_zpg_XY(Context const& c, bool dereference, RegOffset reg_offset)
 {
     auto* const zero_page_base = read_1_byte_opcode(c);
-    auto* const x_reg = load_reg(c, X);
-    auto* const addr = c.builder->CreateAdd(zero_page_base, x_reg);
+    auto* const reg = load_reg(c, reg_offset);
+    auto* const addr = c.builder->CreateAdd(zero_page_base, reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
     auto* const argument = dereference ? read_bus(c, addr_16) : nullptr;
     return {
@@ -511,18 +493,14 @@ addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
     };
 }
 
+addr_mode_result_t addr_zpg_X(Context const& c, bool dereference, bool)
+{
+    return addr_zpg_XY(c, dereference, X);
+}
+
 addr_mode_result_t addr_zpg_Y(Context const& c, bool dereference, bool)
 {
-    auto* const zero_page_base = read_1_byte_opcode(c);
-    auto* const y_reg = load_reg(c, Y);
-    auto* const addr = c.builder->CreateAdd(zero_page_base, y_reg);
-    auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
-    auto* const argument = dereference ? read_bus(c, addr_16) : nullptr;
-    return {
-        .addr = addr_16,
-        .argument = argument,
-        .cycles = int_const<uint64_t>(c, 3),
-    };
+    return addr_zpg_XY(c, dereference, Y);
 }
 
 // Utility
