@@ -75,8 +75,16 @@ struct CPU {
     constexpr auto operator<=>(CPU const&) const noexcept = default;
 };
 
+enum class MemoryRegionType : uint8_t {
+    RAM,
+    ROM,
+    DEVICE,
+};
+
 class Bus {
 public:
+    constexpr static int MEMORY_REGION_BITS = 9;
+
     explicit Bus();
     void load_file(std::filesystem::path const& p, word_t address);
 
@@ -86,7 +94,10 @@ public:
     byte_t read_memory(word_t address) const noexcept;
     void write_memory(word_t address, byte_t value) noexcept;
 
+    MemoryRegionType get_memory_region_type(word_t address) const noexcept;
+
     std::vector<byte_t> memory_space;
+    std::vector<MemoryRegionType> region_type;
 };
 
 } // namespace emu

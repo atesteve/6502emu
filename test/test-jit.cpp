@@ -123,7 +123,7 @@ TEST_P(TestJitCodegen, Test)
 
     auto const& params = this->GetParam();
     auto const control_flow = emu::build_control_flow(_bus, _cpu.PC);
-    auto module = emu::codegen(_context, control_flow, base_module);
+    auto module = emu::codegen(_context, control_flow, base_module, &_em);
     ASSERT_TRUE(module);
     emu::optimize(*module, op_level);
     auto err = emu::materialize(*_jit, _context, std::move(module));
@@ -133,7 +133,11 @@ TEST_P(TestJitCodegen, Test)
     ASSERT_TRUE(test_expected(fn_ex));
     auto* const fn = fn_ex.get().toPtr<emu::jit_fn_t>();
 
-    auto const cycles = fn(&_cpu, &_bus, _bus.memory_space.data(), &_em);
+    auto const cycles = fn(&_cpu,
+                           &_bus,
+                           _bus.memory_space.data(),
+                           reinterpret_cast<emu::byte_t*>(_bus.region_type.data()),
+                           &_em);
 
     EXPECT_EQ(cycles, params.expected_cycles + 6);
 

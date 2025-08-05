@@ -10,10 +10,12 @@
 
 namespace emu {
 
+class Emulator;
+
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext context,
                                       std::map<word_t, control_block> const& flow,
                                       std::string const& base_module_bitcode,
-                                      bool support_self_mod = true);
+                                      Emulator* emu);
 
 std::string build_base(llvm::OptimizationLevel opt_level);
 

@@ -23,7 +23,17 @@ constexpr auto t0 = std::chrono::steady_clock::time_point{};
 
 Bus::Bus()
     : memory_space(std::size_t{0x10000})
-{}
+{
+    for (auto i = 0u; i < 0x10000; i += 1 << MEMORY_REGION_BITS) {
+        if (i < 0x400) {
+            region_type.push_back(MemoryRegionType::RAM);
+        } else if (i < 0x8000) {
+            region_type.push_back(MemoryRegionType::ROM);
+        } else {
+            region_type.push_back(MemoryRegionType::DEVICE);
+        }
+    }
+}
 
 void Bus::load_file(std::filesystem::path const& p, word_t address)
 {
@@ -81,6 +91,11 @@ byte_t Bus::read_memory(word_t address) const noexcept
 void Bus::write_memory(word_t address, byte_t value) noexcept
 {
     memory_space[static_cast<size_t>(address)] = value;
+}
+
+MemoryRegionType Bus::get_memory_region_type(word_t address) const noexcept
+{
+    return region_type[static_cast<size_t>(address) >> MEMORY_REGION_BITS];
 }
 
 } // namespace emu

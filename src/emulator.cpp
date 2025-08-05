@@ -100,7 +100,7 @@ void Emulator::jit_function(word_t addr)
     }
 
     jit_fn.llvm_context = std::make_unique<llvm::LLVMContext>();
-    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_module_bitcode, false);
+    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_module_bitcode, this);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
     emu::optimize(*jit_fn.module,
@@ -150,7 +150,11 @@ uint64_t Emulator::call_function(word_t addr)
     auto const index = static_cast<size_t>(addr);
     jit_fn_t const cache_fn = _jit_functions_cache[index];
     if (cache_fn != nullptr) {
-        auto const ret = cache_fn(&_cpu, &_bus, _bus.memory_space.data(), this);
+        auto const ret = cache_fn(&_cpu,
+                                  &_bus,
+                                  _bus.memory_space.data(),
+                                  reinterpret_cast<byte_t*>(_bus.region_type.data()),
+                                  this);
         _jit_clock_counter += ret;
         return ret;
     }

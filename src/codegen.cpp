@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "emulator.h"
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -69,6 +70,7 @@ using enum FlagOffset;
 
 struct Context {
     inst::Instruction const* inst{};
+    Emulator* emu{};
     llvm::LLVMContext* context{};
     llvm::IRBuilder<>* builder{};
     llvm::StructType* cpu_type{};
@@ -82,12 +84,12 @@ struct Context {
     llvm::Value* cycle_counter_ptr{};
     llvm::Value* aux_8b_ptr{};
     llvm::Module* module{};
-    bool support_self_mod{true};
+    bool support_self_mod{};
 };
 
 using inst_codegen_t = llvm::Value* (*)(Context const&);
 
-enum JitFnArg : int { CPU, BUS, MEMORY, EMULATOR };
+enum JitFnArg : int { CPU, BUS, MEMORY, REGION_TYPE, EMULATOR };
 
 // Addressing modes
 
@@ -227,20 +229,31 @@ void return_function(Context const& c, llvm::Value* pc_value)
 
 llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
 {
-    if (addr->getZExtValue() < 0x8000) {
+    word_t const addr_val{addr->getZExtValue()};
+
+    switch (c.emu->get_bus().get_memory_region_type(addr_val)) {
+        using enum MemoryRegionType;
+    case RAM: {
         // If regular memory, just read from memory
         auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                              c.fn->getArg(MEMORY),
                                              {int_const(c, 0), addr});
         return load<uint8_t>(c, p);
-    } else {
-
+    }
+    case ROM: {
+        // If ROM, we know the address now, so can return the value as a constant.
+        return int_const(c, c.emu->get_bus().read_memory(addr_val));
+    }
+    case DEVICE: {
         // If mapped memory, perform a call to the bus object
         auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
         call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
             *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
         return call;
     }
+    };
+
+    std::unreachable();
 }
 
 llvm::Value* read_bus(Context const& c, llvm::Value* addr)
@@ -359,9 +372,9 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     c.builder->SetInsertPoint(block_eq);
 }
 
-llvm::Value* read_1_byte_argument(Context const& c, bool support_self_mod = true)
+llvm::Value* read_1_byte_argument(Context const& c)
 {
-    if (support_self_mod) {
+    if (c.support_self_mod) {
         return read_bus(c, int_const(c, c.inst->pc + 1_w));
     } else {
         return int_const(c, c.inst->bytes[1]);
@@ -401,28 +414,6 @@ void call_printf(Context const& c, const char* format, T*... args)
 
 addr_mode_result_t addr_imm(Context const& c, bool, bool)
 {
-    auto* const bus_argument = read_bus(c, int_const(c, c.inst->pc + 1_w));
-    auto* const inst_argument = int_const(c, c.inst->bytes[1]);
-
-    auto* const addres_cmp =
-        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, bus_argument, inst_argument);
-
-    auto* const address_match = llvm::BasicBlock::Create(*c.context, "", c.fn);
-    auto* const address_mismatch = llvm::BasicBlock::Create(*c.context, "", c.fn);
-
-    c.builder->CreateCondBr(expect(c, addres_cmp, true), address_match, address_mismatch);
-
-    c.builder->SetInsertPoint(address_mismatch);
-    call_printf(c,
-                "Address mismatch, PC: 0x%04x, opcode: 0x%02x, bus: 0x%02x, inst: 0x%02x\n",
-                int_const(c, c.inst->pc),
-                int_const(c, c.inst->bytes[0]),
-                bus_argument,
-                inst_argument);
-    c.builder->CreateBr(address_match);
-
-    c.builder->SetInsertPoint(address_match);
-
     return {
         .addr = nullptr,
         .data = read_1_byte_argument(c),
@@ -1438,6 +1429,7 @@ auto* create_jit_function_type(llvm::LLVMContext& context)
                                     llvm::PointerType::get(context, 0) /* CPU* cpu */,
                                     llvm::PointerType::get(context, 0) /* Bus* bus */,
                                     llvm::PointerType::get(context, 0) /* byte_t* mem */,
+                                    llvm::PointerType::get(context, 0) /* byte_t* region_tpe */,
                                     llvm::PointerType::get(context, 0) /* Emulator* em */,
                                 },
                                 false);
@@ -1573,7 +1565,7 @@ std::unique_ptr<llvm::Module> parse_bitcode(llvm::LLVMContext* context,
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                       std::map<word_t, control_block> const& flow,
                                       std::string const& base_module_bitcode,
-                                      bool support_self_mod)
+                                      emu::Emulator* emu)
 {
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
@@ -1630,6 +1622,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     builder->CreateBr(first);
 
     Context ctx{
+        .emu = emu,
         .context = context,
         .builder = builder.get(),
         .cpu_type = create_cpu_struct_type(*context),
@@ -1642,7 +1635,6 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         .printf_fn = printf_fn,
         .cycle_counter_ptr = cycle_counter,
         .aux_8b_ptr = aux_8b,
-        .support_self_mod = support_self_mod,
     };
 
     for (auto const& entry : flow) {
@@ -1651,8 +1643,10 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         llvm::Value* last_result = nullptr;
         for (auto const& instruction : entry.second.instructions) {
             ctx.inst = &instruction;
+            ctx.support_self_mod = emu->get_bus().get_memory_region_type(instruction.get_pc())
+                == MemoryRegionType::RAM;
 
-            if (support_self_mod) {
+            if (ctx.support_self_mod) {
                 // Check for modification of expected instruction. If modified, abort and let the
                 // interpreter continue the execution.
                 auto const inst_repr = instruction.get_16bit_representation();
