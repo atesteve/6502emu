@@ -7,6 +7,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cstdio>
+
 namespace emu {
 namespace {
 
@@ -50,6 +52,7 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> make_jit()
          llvm::orc::ExecutorSymbolDef::fromPtr(write_bus, flags)},
         {jit_ptr->mangleAndIntern("call_function"),
          llvm::orc::ExecutorSymbolDef::fromPtr(call_function, flags)},
+        {jit_ptr->mangleAndIntern("printf"), llvm::orc::ExecutorSymbolDef::fromPtr(printf, flags)},
     }));
 
     if (err) {

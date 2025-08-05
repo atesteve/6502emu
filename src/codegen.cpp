@@ -78,9 +78,11 @@ struct Context {
     llvm::Function* add_fn{};
     llvm::Function* sub_fn{};
     llvm::Function* call_function_fn{};
+    llvm::Function* printf_fn{};
     llvm::Value* cycle_counter_ptr{};
     llvm::Value* aux_8b_ptr{};
     llvm::Module* module{};
+    bool support_self_mod{true};
 };
 
 using inst_codegen_t = llvm::Value* (*)(Context const&);
@@ -357,13 +359,24 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
     c.builder->SetInsertPoint(block_eq);
 }
 
-auto* read_1_byte_argument(Context const& c) { return read_bus(c, int_const(c, c.inst->pc + 1_w)); }
-
-auto* read_2_byte_argument(Context const& c)
+llvm::Value* read_1_byte_argument(Context const& c, bool support_self_mod = true)
 {
-    auto* const result_lo = read_bus(c, int_const(c, c.inst->pc + 1_w));
-    auto* const result_hi = read_bus(c, int_const(c, c.inst->pc + 2_w));
-    return assemble(c, result_lo, result_hi);
+    if (support_self_mod) {
+        return read_bus(c, int_const(c, c.inst->pc + 1_w));
+    } else {
+        return int_const(c, c.inst->bytes[1]);
+    }
+}
+
+llvm::Value* read_2_byte_argument(Context const& c)
+{
+    if (c.support_self_mod) {
+        auto* const lo_byte = read_bus(c, int_const(c, c.inst->pc + 1_w));
+        auto* const hi_byte = read_bus(c, int_const(c, c.inst->pc + 2_w));
+        return assemble(c, lo_byte, hi_byte);
+    } else {
+        return int_const(c, assemble(c.inst->bytes[1], c.inst->bytes[2]));
+    }
 }
 
 auto* same_page(Context const& c, llvm::Value* addr_1, llvm::Value* addr_2)
@@ -373,10 +386,43 @@ auto* same_page(Context const& c, llvm::Value* addr_1, llvm::Value* addr_2)
         llvm::CmpInst::Predicate::ICMP_ULE, addr_xor, int_const(c, 0xff_w));
 }
 
+template<typename... T>
+void call_printf(Context const& c, const char* format, T*... args)
+{
+    auto* const call =
+        c.builder->CreateCall(c.printf_fn,
+                              {int_const(c, reinterpret_cast<uintptr_t>(format)),
+                               c.builder->CreateZExt(args, int_type<uintptr_t>(c))...});
+    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+}
+
 // Address mode codegen
 
 addr_mode_result_t addr_imm(Context const& c, bool, bool)
 {
+    auto* const bus_argument = read_bus(c, int_const(c, c.inst->pc + 1_w));
+    auto* const inst_argument = int_const(c, c.inst->bytes[1]);
+
+    auto* const addres_cmp =
+        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, bus_argument, inst_argument);
+
+    auto* const address_match = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const address_mismatch = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+    c.builder->CreateCondBr(expect(c, addres_cmp, true), address_match, address_mismatch);
+
+    c.builder->SetInsertPoint(address_mismatch);
+    call_printf(c,
+                "Address mismatch, PC: 0x%04x, opcode: 0x%02x, bus: 0x%02x, inst: 0x%02x\n",
+                int_const(c, c.inst->pc),
+                int_const(c, c.inst->bytes[0]),
+                bus_argument,
+                inst_argument);
+    c.builder->CreateBr(address_match);
+
+    c.builder->SetInsertPoint(address_match);
+
     return {
         .addr = nullptr,
         .data = read_1_byte_argument(c),
@@ -715,7 +761,6 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
         cycles = c.builder->CreateAdd(cycles_base, add_cycles);
     }
 
-    // store_pc(c, int_const(c, c.inst->pc));
     add_cycle_counter(c, cycles);
 
     return test_result;
@@ -1399,26 +1444,6 @@ auto* create_jit_function_type(llvm::LLVMContext& context)
     return fn_type;
 }
 
-auto* create_instruction_function_type(llvm::LLVMContext& context)
-{
-    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
-                                            {llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0)},
-                                            false);
-    return fn_type;
-}
-
-auto* create_addr_mode_function_type(llvm::LLVMContext& context)
-{
-    auto* fn_type = llvm::FunctionType::get(int_type<uint64_t>(context),
-                                            {llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0),
-                                             llvm::PointerType::get(context, 0)},
-                                            false);
-    return fn_type;
-}
-
 auto* create_bus_read_function_type(llvm::LLVMContext& context)
 {
     auto* fn_type = llvm::FunctionType::get(int_type<uint8_t>(context),
@@ -1547,7 +1572,8 @@ std::unique_ptr<llvm::Module> parse_bitcode(llvm::LLVMContext* context,
 
 std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                       std::map<word_t, control_block> const& flow,
-                                      std::string const& base_module_bitcode)
+                                      std::string const& base_module_bitcode,
+                                      bool support_self_mod)
 {
     auto lock = tsc.getLock();
     auto* context = tsc.getContext();
@@ -1570,6 +1596,15 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                                     llvm::Function::LinkageTypes::ExternalLinkage,
                                                     "call_function",
                                                     module.get());
+
+    auto* printf_type = llvm::FunctionType::get(int_type<int32_t>(*context),
+                                                {
+                                                    int_type<uintptr_t>(*context) /* format */,
+                                                },
+                                                true);
+
+    auto* printf_fn = llvm::Function::Create(
+        printf_type, llvm::Function::LinkageTypes::ExternalLinkage, "printf", module.get());
 
     auto* fn_type = create_jit_function_type(*context);
     auto* fn = llvm::Function::Create(fn_type,
@@ -1604,8 +1639,10 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         .add_fn = module->getFunction("add_fn"),
         .sub_fn = module->getFunction("sub_fn"),
         .call_function_fn = call_function_fn,
+        .printf_fn = printf_fn,
         .cycle_counter_ptr = cycle_counter,
         .aux_8b_ptr = aux_8b,
+        .support_self_mod = support_self_mod,
     };
 
     for (auto const& entry : flow) {
@@ -1614,34 +1651,38 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         llvm::Value* last_result = nullptr;
         for (auto const& instruction : entry.second.instructions) {
             ctx.inst = &instruction;
+
+            if (support_self_mod) {
+                // Check for modification of expected instruction. If modified, abort and let the
+                // interpreter continue the execution.
+                auto const inst_repr = instruction.get_16bit_representation();
+                auto* const p =
+                    builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(ctx), 0x10000),
+                                       ctx.fn->getArg(MEMORY),
+                                       {int_const(ctx, 0), int_const(ctx, instruction.pc)});
+                auto* const load_inst_repr = unaligned_load<uint16_t>(ctx, p);
+                auto const mask = word_t{self_mod_table[static_cast<size_t>(instruction.bytes[0])]};
+                auto* const masked_inst_repr =
+                    builder->CreateAnd(load_inst_repr, int_const(ctx, mask));
+                auto* const inst_matches = builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ,
+                                                              masked_inst_repr,
+                                                              int_const(ctx, inst_repr & mask));
+
+                auto* const inst_matches_block = llvm::BasicBlock::Create(*context, "", fn);
+                auto* const inst_doesnt_match_block = llvm::BasicBlock::Create(*context, "", fn);
+
+                builder->CreateCondBr(
+                    expect(ctx, inst_matches, true), inst_matches_block, inst_doesnt_match_block);
+
+                // If the instruction doesn't match, return
+                builder->SetInsertPoint(inst_doesnt_match_block);
+                return_function(ctx, int_const(ctx, instruction.pc));
+
+                // Else, just continue normally.
+                builder->SetInsertPoint(inst_matches_block);
+            }
+
             auto* const codegen_fn = instruction_table[static_cast<size_t>(instruction.bytes[0])];
-
-            // Check for modification of expected instruction. If modified, abort and let the
-            // interpreter continue the execution.
-            auto const inst_repr = instruction.get_16bit_representation();
-            auto* const p =
-                builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(ctx), 0x10000),
-                                   ctx.fn->getArg(MEMORY),
-                                   {int_const(ctx, 0), int_const(ctx, instruction.pc)});
-            auto* const load_inst_repr = unaligned_load<uint16_t>(ctx, p);
-            auto const mask = word_t{self_mod_table[static_cast<size_t>(instruction.bytes[0])]};
-            auto* const masked_inst_repr = builder->CreateAnd(load_inst_repr, int_const(ctx, mask));
-            auto* const inst_matches = builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ,
-                                                          masked_inst_repr,
-                                                          int_const(ctx, inst_repr & mask));
-
-            auto* const inst_matches_block = llvm::BasicBlock::Create(*context, "", fn);
-            auto* const inst_doesnt_match_block = llvm::BasicBlock::Create(*context, "", fn);
-
-            builder->CreateCondBr(
-                expect(ctx, inst_matches, true), inst_matches_block, inst_doesnt_match_block);
-
-            // If the instruction doesn't match, return
-            builder->SetInsertPoint(inst_doesnt_match_block);
-            return_function(ctx, int_const(ctx, instruction.pc));
-
-            // Else, just continue normally.
-            builder->SetInsertPoint(inst_matches_block);
 
             last_result = codegen_fn(ctx);
             auto const next_addr = instruction.get_pc() + word_t{instruction.length};

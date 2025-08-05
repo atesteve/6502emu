@@ -100,7 +100,7 @@ void Emulator::jit_function(word_t addr)
     }
 
     jit_fn.llvm_context = std::make_unique<llvm::LLVMContext>();
-    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_module_bitcode);
+    jit_fn.module = emu::codegen(jit_fn.llvm_context, jit_fn.flow, _base_module_bitcode, false);
     auto const finish_codegen = std::chrono::steady_clock::now();
 
     emu::optimize(*jit_fn.module,

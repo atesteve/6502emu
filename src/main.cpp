@@ -20,6 +20,8 @@ llvm::ExitOnError exit_on_error;
 
 } // namespace
 
+std::unique_ptr<emu::Emulator> global_emu;
+
 struct Opt {
     int level;
 
@@ -73,27 +75,27 @@ int main(int argc, char** argv)
 
     spdlog::set_level(spdlog::level::debug);
 
-    emu::Emulator emulator{optimization_level};
-    emulator.initialize(bin_file, load_address, entry_point);
+    global_emu = std::make_unique<emu::Emulator>(optimization_level);
+    global_emu->initialize(bin_file, load_address, entry_point);
 
     uint64_t instruction_count = 0;
     auto const start = std::chrono::steady_clock::now();
 
     try {
-        emulator.call_function(entry_point);
+        global_emu->call_function(entry_point);
         while (true) {
-            emulator.run();
+            global_emu->run();
         }
     } catch (std::exception const& e) {
         spdlog::info("Exception: {}", e.what());
-        spdlog::info("PC: {:#04x}", emulator.get_cpu().PC);
+        spdlog::info("PC: {:#04x}", global_emu->get_cpu().PC);
         for (emu::word_t i = 0_w; i < 0x20_w; ++i) {
             if (i % 0x10_w == 0_w) {
                 fmt::print("\n{:04x}: ", i);
             } else if (i % 0x8_w == 0_w) {
                 fmt::print(" ");
             }
-            fmt::print("{:02x} ", emulator.get_bus().read_memory(i));
+            fmt::print("{:02x} ", global_emu->get_bus().read_memory(i));
         }
         fmt::print("\n\n");
     }
