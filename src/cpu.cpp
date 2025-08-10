@@ -79,6 +79,7 @@ void Bus::write(word_t address, byte_t value) noexcept
 
         std::cout << static_cast<char>(value);
         std::cout.flush();
+        return;
     }
     memory_space[static_cast<size_t>(address)] = value;
 }
