@@ -1344,11 +1344,11 @@ void create_dec_sub_fn(Context const& c, llvm::Value* lhs, llvm::Value* rhs)
     c.builder->CreateRetVoid();
 }
 
-auto* create_add_sub_fn_type(llvm::LLVMContext& context)
+auto* create_add_sub_fn_type(llvm::LLVMContext& context, llvm::StructType* cpu_type)
 {
     return llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                    {
-                                       llvm::PointerType::get(context, 0) /* CPU* cpu */,
+                                       llvm::PointerType::get(cpu_type, 0) /* CPU* cpu */,
                                        int_type<uint8_t>(context) /* byte_t data*/,
                                    },
                                    false);
@@ -1356,7 +1356,7 @@ auto* create_add_sub_fn_type(llvm::LLVMContext& context)
 
 auto* create_add_sub_fn(Context const& c, bool add)
 {
-    auto* fn_type = create_add_sub_fn_type(*c.context);
+    auto* fn_type = create_add_sub_fn_type(*c.context, c.cpu_type);
     auto* fn = llvm::Function::Create(fn_type,
                                       llvm::Function::LinkageTypes::ExternalLinkage,
                                       add ? "add_fn" : "sub_fn",
@@ -1421,37 +1421,41 @@ auto* create_cpu_struct_type(llvm::LLVMContext& context)
     return cpu_struct;
 }
 
-auto* create_jit_function_type(llvm::LLVMContext& context)
+auto* create_jit_function_type(llvm::LLVMContext& context,
+                               llvm::StructType* cpu_type,
+                               llvm::StructType* bus_type,
+                               llvm::StructType* emu_type)
 {
+    auto* const uint8_type = int_type<uint8_t>(context);
     auto* fn_type =
         llvm::FunctionType::get(int_type<uint64_t>(context),
                                 {
-                                    llvm::PointerType::get(context, 0) /* CPU* cpu */,
-                                    llvm::PointerType::get(context, 0) /* Bus* bus */,
-                                    llvm::PointerType::get(context, 0) /* byte_t* mem */,
-                                    llvm::PointerType::get(context, 0) /* byte_t* region_tpe */,
-                                    llvm::PointerType::get(context, 0) /* Emulator* em */,
+                                    llvm::PointerType::get(cpu_type, 0) /* CPU* cpu */,
+                                    llvm::PointerType::get(bus_type, 0) /* Bus* bus */,
+                                    llvm::PointerType::get(uint8_type, 0) /* byte_t* mem */,
+                                    llvm::PointerType::get(uint8_type, 0) /* byte_t* region_type */,
+                                    llvm::PointerType::get(emu_type, 0) /* Emulator* em */,
                                 },
                                 false);
     return fn_type;
 }
 
-auto* create_bus_read_function_type(llvm::LLVMContext& context)
+auto* create_bus_read_function_type(llvm::LLVMContext& context, llvm::StructType* bus_type)
 {
     auto* fn_type = llvm::FunctionType::get(int_type<uint8_t>(context),
                                             {
-                                                llvm::PointerType::get(context, 0) /* Bus* bus */,
+                                                llvm::PointerType::get(bus_type, 0) /* Bus* bus */,
                                                 int_type<uint16_t>(context) /* word_t addr */,
                                             },
                                             false);
     return fn_type;
 }
 
-auto* create_bus_write_function_type(llvm::LLVMContext& context)
+auto* create_bus_write_function_type(llvm::LLVMContext& context, llvm::StructType* bus_type)
 {
     auto* fn_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                             {
-                                                llvm::PointerType::get(context, 0) /* Bus* bus */,
+                                                llvm::PointerType::get(bus_type, 0) /* Bus* bus */,
                                                 int_type<uint16_t>(context) /* word_t addr */,
                                                 int_type<uint8_t>(context) /* byte_t data */,
                                             },
@@ -1459,12 +1463,12 @@ auto* create_bus_write_function_type(llvm::LLVMContext& context)
     return fn_type;
 }
 
-auto* create_call_function_function_type(llvm::LLVMContext& context)
+auto* create_call_function_function_type(llvm::LLVMContext& context, llvm::StructType* emu_type)
 {
     auto* fn_type =
         llvm::FunctionType::get(int_type<uint64_t>(context),
                                 {
-                                    llvm::PointerType::get(context, 0) /* Emulator* em */,
+                                    llvm::PointerType::get(emu_type, 0) /* Emulator* em */,
                                     int_type<uint16_t>(context) /* word_t addr */,
                                 },
                                 false);
@@ -1574,20 +1578,25 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
     auto builder = std::make_unique<llvm::IRBuilder<>>(*context);
 
-    auto* read_bus_fn = llvm::Function::Create(create_bus_read_function_type(*context),
+    auto* const cpu_type = create_cpu_struct_type(*context);
+    auto* const bus_type = llvm::StructType::create(*context, "bus_type"); // Just declared
+    auto* const emu_type = llvm::StructType::create(*context, "emu_type"); // Just declared
+
+    auto* read_bus_fn = llvm::Function::Create(create_bus_read_function_type(*context, bus_type),
                                                llvm::Function::LinkageTypes::ExternalLinkage,
                                                "read_bus",
                                                module.get());
 
-    auto* write_bus_fn = llvm::Function::Create(create_bus_write_function_type(*context),
+    auto* write_bus_fn = llvm::Function::Create(create_bus_write_function_type(*context, bus_type),
                                                 llvm::Function::LinkageTypes::ExternalLinkage,
                                                 "write_bus",
                                                 module.get());
 
-    auto* call_function_fn = llvm::Function::Create(create_call_function_function_type(*context),
-                                                    llvm::Function::LinkageTypes::ExternalLinkage,
-                                                    "call_function",
-                                                    module.get());
+    auto* call_function_fn =
+        llvm::Function::Create(create_call_function_function_type(*context, emu_type),
+                               llvm::Function::LinkageTypes::ExternalLinkage,
+                               "call_function",
+                               module.get());
 
     auto* printf_type = llvm::FunctionType::get(int_type<int32_t>(*context),
                                                 {
@@ -1598,7 +1607,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
     auto* printf_fn = llvm::Function::Create(
         printf_type, llvm::Function::LinkageTypes::ExternalLinkage, "printf", module.get());
 
-    auto* fn_type = create_jit_function_type(*context);
+    auto* fn_type = create_jit_function_type(*context, cpu_type, bus_type, emu_type);
     auto* fn = llvm::Function::Create(fn_type,
                                       llvm::Function::LinkageTypes::ExternalLinkage,
                                       fmt::format("fn_{:04x}", flow.begin()->first),
@@ -1625,7 +1634,7 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
         .emu = emu,
         .context = context,
         .builder = builder.get(),
-        .cpu_type = create_cpu_struct_type(*context),
+        .cpu_type = cpu_type,
         .fn = fn,
         .read_bus_fn = read_bus_fn,
         .write_bus_fn = write_bus_fn,
