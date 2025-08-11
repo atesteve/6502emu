@@ -99,6 +99,8 @@ struct addr_mode_result_t {
     llvm::Value* data;   // Data yielded by the addressing mode. May be null if the memory address
                          // is not dereferenced (store instructions).
     llvm::Value* cycles; // Total cycles taken by the addressing mode.
+    std::optional<MemoryRegionType>
+        memory_region; // Deduced memory region of the resuling memory address.
 };
 
 template<typename Int>
@@ -237,6 +239,22 @@ void return_function(Context const& c, llvm::Value* pc_value)
     c.builder->CreateRet(cycles);
 }
 
+template<typename Int>
+Int get_const_value(llvm::ConstantInt* val)
+{
+    return static_cast<Int>(val->getZExtValue());
+}
+
+template<typename Int>
+std::optional<Int> get_const_value(llvm::Value* val)
+{
+    auto* const_val = llvm::dyn_cast<llvm::ConstantInt>(val);
+    if (!const_val) {
+        return std::nullopt;
+    }
+    return get_const_value<Int>(const_val);
+}
+
 llvm::Value* read_memory_region_type(Context const& c, llvm::Value* addr)
 {
     auto const memory_region_bits = c.emu->get_bus().MEMORY_REGION_BITS;
@@ -286,9 +304,11 @@ llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
     std::unreachable();
 }
 
-llvm::Value* read_bus(Context const& c, llvm::Value* addr, bool force_ram = false)
+llvm::Value* read_bus(Context const& c,
+                      llvm::Value* addr,
+                      std::optional<MemoryRegionType> force_type = std::nullopt)
 {
-    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr); const_addr && !force_ram) {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
         return read_bus(c, const_addr);
     }
 
@@ -296,8 +316,19 @@ llvm::Value* read_bus(Context const& c, llvm::Value* addr, bool force_ram = fals
                                          c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
 
-    if (force_ram) {
-        return load<uint8_t>(c, p);
+    if (force_type) {
+        switch (*force_type) {
+            using enum MemoryRegionType;
+        case RAM:
+            return load<uint8_t>(c, p);
+        case ROM:
+            return load<uint8_t>(c, p, true);
+        case DEVICE:
+            auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
+            call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+                *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+            return call;
+        }
     }
 
     auto* const region_type = read_memory_region_type(c, addr);
@@ -350,9 +381,12 @@ void write_bus(Context const& c, llvm::ConstantInt* addr, llvm::Value* value)
     }
 }
 
-void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value, bool force_ram = false)
+void write_bus(Context const& c,
+               llvm::Value* addr,
+               llvm::Value* value,
+               std::optional<MemoryRegionType> force_type = std::nullopt)
 {
-    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr); const_addr && !force_ram) {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
         return write_bus(c, const_addr, value);
     }
 
@@ -360,8 +394,20 @@ void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value, bool for
                                          c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
 
-    if (force_ram) {
-        return store<uint8_t>(c, value, p);
+    if (force_type) {
+        switch (*force_type) {
+            using enum MemoryRegionType;
+        case RAM:
+            return store<uint8_t>(c, value, p);
+        case ROM:
+            return; // Do nothing
+        case DEVICE:
+            auto* const call =
+                c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
+            call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+                *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+            return;
+        }
     }
 
     auto* const region_type = read_memory_region_type(c, addr);
@@ -424,7 +470,7 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 llvm::Value* read_1_byte_argument(Context const& c)
 {
     if (c.support_self_mod) {
-        return read_bus(c, int_const(c, c.inst->pc + 1_w), true);
+        return read_bus(c, int_const(c, c.inst->pc + 1_w), MemoryRegionType::RAM);
     } else {
         return int_const(c, c.inst->bytes[1]);
     }
@@ -433,8 +479,8 @@ llvm::Value* read_1_byte_argument(Context const& c)
 llvm::Value* read_2_byte_argument(Context const& c)
 {
     if (c.support_self_mod) {
-        auto* const lo_byte = read_bus(c, int_const(c, c.inst->pc + 1_w), true);
-        auto* const hi_byte = read_bus(c, int_const(c, c.inst->pc + 2_w), true);
+        auto* const lo_byte = read_bus(c, int_const(c, c.inst->pc + 1_w), MemoryRegionType::RAM);
+        auto* const hi_byte = read_bus(c, int_const(c, c.inst->pc + 2_w), MemoryRegionType::RAM);
         return assemble(c, lo_byte, hi_byte);
     } else {
         return int_const(c, assemble(c.inst->bytes[1], c.inst->bytes[2]));
@@ -459,6 +505,28 @@ void call_printf(Context const& c, const char* format, T*... args)
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
 }
 
+std::optional<MemoryRegionType>
+    get_memory_region(Context const& c, llvm::Value* base_addr, bool check_next_page)
+{
+    // If the base address is constant, then we can get the region type.
+    auto const base_addr_val = get_const_value<word_t>(base_addr);
+    if (!base_addr_val) {
+        return std::nullopt;
+    }
+    auto const type1 = c.emu->get_bus().get_memory_region_type(*base_addr_val);
+
+    if (!check_next_page) {
+        return type1;
+    }
+
+    // For cases where the base address is added to the value of a register, we need to check also
+    // the type of the next page. If both are the same, then we can guarantee that the memory region
+    // type will be always the same regardless of the value of the register.
+    auto const type2 = c.emu->get_bus().get_memory_region_type(*base_addr_val + 0x100_w);
+
+    return type1 == type2 ? std::optional{type1} : std::nullopt;
+};
+
 // Address mode codegen
 
 addr_mode_result_t addr_imm(Context const& c, bool, bool)
@@ -467,6 +535,7 @@ addr_mode_result_t addr_imm(Context const& c, bool, bool)
         .addr = nullptr,
         .data = read_1_byte_argument(c),
         .cycles = int_const<uint64_t>(c, 1),
+        .memory_region = std::nullopt,
     };
 }
 
@@ -479,22 +548,25 @@ addr_mode_result_t addr_abs(Context const& c, bool dereference, bool)
         .addr = addr,
         .data = data,
         .cycles = int_const<uint64_t>(c, 3),
+        .memory_region = get_memory_region(c, addr, false),
     };
 }
 
 addr_mode_result_t
-    addr_abs_XY(Context const& c, bool dereference, bool force_extra_cycle, RegOffset reg_offset)
+    addr_abs_XY(Context const& c, bool dereference, bool force_extra_cycle, RegOffset x_or_y)
 {
     auto* const base_addr = read_2_byte_argument(c);
-    auto* const reg = load_reg(c, reg_offset);
+    auto* const reg = load_reg(c, x_or_y);
     auto* const reg_16 = c.builder->CreateZExt(reg, int_type<uint16_t>(c));
     auto* const effective_addr = c.builder->CreateAdd(base_addr, reg_16);
 
     llvm::Value* data = nullptr;
     llvm::Value* extra_cycle;
 
+    auto const region_type = get_memory_region(c, base_addr, true);
+
     if (dereference) {
-        data = read_bus(c, effective_addr);
+        data = read_bus(c, effective_addr, region_type);
     }
 
     if (force_extra_cycle) {
@@ -509,6 +581,7 @@ addr_mode_result_t
         .addr = effective_addr,
         .data = data,
         .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 3), extra_cycle),
+        .memory_region = region_type,
     };
 }
 
@@ -531,8 +604,8 @@ addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
     auto* const zero_page_addr_16 = c.builder->CreateZExt(zero_page_addr, int_type<uint16_t>(c));
     auto* const zero_page_addr_p1_16 =
         c.builder->CreateZExt(zero_page_addr_p1, int_type<uint16_t>(c));
-    auto* const ind_addr_lo = read_bus(c, zero_page_addr_16);
-    auto* const ind_addr_hi = read_bus(c, zero_page_addr_p1_16);
+    auto* const ind_addr_lo = read_bus(c, zero_page_addr_16, MemoryRegionType::RAM);
+    auto* const ind_addr_hi = read_bus(c, zero_page_addr_p1_16, MemoryRegionType::RAM);
     auto* const addr = assemble(c, ind_addr_lo, ind_addr_hi);
     auto* const data = dereference ? read_bus(c, addr) : nullptr;
 
@@ -540,6 +613,7 @@ addr_mode_result_t addr_X_ind(Context const& c, bool dereference, bool)
         .addr = addr,
         .data = data,
         .cycles = int_const<uint64_t>(c, 5),
+        .memory_region = std::nullopt,
     };
 }
 
@@ -549,8 +623,8 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
     auto* const zero_page_base_16 = c.builder->CreateZExt(zero_page_base, int_type<uint16_t>(c));
     auto* const zero_page_base_16_p1 = c.builder->CreateAdd(zero_page_base_16, int_const(c, 1_w));
 
-    auto* const base_addr_lo = read_bus(c, zero_page_base_16);
-    auto* const base_addr_hi = read_bus(c, zero_page_base_16_p1);
+    auto* const base_addr_lo = read_bus(c, zero_page_base_16, MemoryRegionType::RAM);
+    auto* const base_addr_hi = read_bus(c, zero_page_base_16_p1, MemoryRegionType::RAM);
     auto* const base_addr = assemble(c, base_addr_lo, base_addr_hi);
 
     auto* const y_reg = c.builder->CreateZExt(load_reg(c, Y), int_type<uint16_t>(c));
@@ -575,17 +649,19 @@ addr_mode_result_t addr_ind_Y(Context const& c, bool dereference, bool force_ext
         .addr = effective_addr,
         .data = data,
         .cycles = c.builder->CreateAdd(int_const<uint64_t>(c, 4), extra_cycle),
+        .memory_region = std::nullopt,
     };
 }
 
 addr_mode_result_t addr_zpg(Context const& c, bool dereference, bool)
 {
     auto* const addr = c.builder->CreateZExt(read_1_byte_argument(c), int_type<uint16_t>(c));
-    auto* const data = dereference ? read_bus(c, addr) : nullptr;
+    auto* const data = dereference ? read_bus(c, addr, MemoryRegionType::RAM) : nullptr;
     return {
         .addr = addr,
         .data = data,
         .cycles = int_const<uint64_t>(c, 2),
+        .memory_region = MemoryRegionType::RAM,
     };
 }
 
@@ -595,11 +671,12 @@ addr_mode_result_t addr_zpg_XY(Context const& c, bool dereference, RegOffset reg
     auto* const reg = load_reg(c, reg_offset);
     auto* const addr = c.builder->CreateAdd(zero_page_base, reg);
     auto* const addr_16 = c.builder->CreateZExt(addr, int_type<uint16_t>(c));
-    auto* const data = dereference ? read_bus(c, addr_16) : nullptr;
+    auto* const data = dereference ? read_bus(c, addr_16, MemoryRegionType::RAM) : nullptr;
     return {
         .addr = addr_16,
         .data = data,
         .cycles = int_const<uint64_t>(c, 3),
+        .memory_region = MemoryRegionType::RAM,
     };
 }
 
@@ -647,7 +724,7 @@ void push(Context const& c, llvm::Value* value)
     auto* const sp = load_reg(c, SP);
     auto* const sp_16 = c.builder->CreateZExt(sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(sp_16, int_const(c, STACK_BASE));
-    write_bus(c, stack_addr, value, true);
+    write_bus(c, stack_addr, value, MemoryRegionType::RAM);
     auto* const decreased_sp = c.builder->CreateSub(sp, int_const(c, 1_b));
     store_reg(c, SP, decreased_sp);
 }
@@ -659,7 +736,7 @@ llvm::Value* pop(Context const& c)
     store_reg(c, SP, increased_sp);
     auto* const increased_sp_16 = c.builder->CreateZExt(increased_sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(increased_sp_16, int_const(c, STACK_BASE));
-    return read_bus(c, stack_addr, true);
+    return read_bus(c, stack_addr, MemoryRegionType::RAM);
 }
 
 llvm::Value* load_sr(Context const& c)
@@ -716,7 +793,7 @@ void store_sr(Context const& c, llvm::Value* value)
 
 llvm::Value* bin_logic_op(Context const& c, build_bin_fn_t bin_fn, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
     auto* const a_reg = load_reg(c, A);
     auto* const result = std::invoke(bin_fn, c.builder, a_reg, data, "");
     store_reg(c, A, result);
@@ -753,12 +830,12 @@ using shift_fn_t = std::pair<llvm::Value*, llvm::Value*> (*)(Context const& c,
 
 llvm::Value* shift_mem_op(Context const& c, shift_fn_t fn, bool roll, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, true);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, true);
     auto* const shift_in = roll ? static_cast<llvm::Value*>(load_flag(c, C))
                                 : static_cast<llvm::Value*>(int_const(c, false));
     auto const [result, carry_flag] = fn(c, data, shift_in);
     store_flag(c, C, carry_flag);
-    write_bus(c, addr, result);
+    write_bus(c, addr, result, memory_region);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 3)));
     return nullptr;
@@ -808,7 +885,7 @@ llvm::Value* branch_op(Context const& c, FlagOffset flag_off, bool test)
 
 llvm::Value* cmp_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
     auto* const reg = load_reg(c, reg_offset);
     auto* const result = c.builder->CreateSub(reg, data);
 
@@ -841,10 +918,10 @@ llvm::Value* set_flag_op(Context const& c, FlagOffset flag_offset, bool value)
 
 llvm::Value* inc_dec_mem_op(Context const& c, addr_fn_t addr_mode, bool increase)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
     auto* const result = increase ? c.builder->CreateAdd(data, int_const(c, 1_b))
                                   : c.builder->CreateSub(data, int_const(c, 1_b));
-    write_bus(c, addr, result);
+    write_bus(c, addr, result, memory_region);
     set_n_z(c, result);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 3)));
     return nullptr;
@@ -863,16 +940,16 @@ llvm::Value* inc_dec_reg_op(Context const& c, RegOffset reg_offset, bool increas
 
 llvm::Value* store_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, false, true);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, false, true);
     auto* const reg = load_reg(c, reg_offset);
-    write_bus(c, addr, reg);
+    write_bus(c, addr, reg, memory_region);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
     return nullptr;
 }
 
 llvm::Value* load_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
     store_reg(c, reg_offset, data);
     set_n_z(c, data);
     add_cycle_counter(c, c.builder->CreateAdd(cycles, int_const<uint64_t>(c, 1)));
@@ -881,7 +958,7 @@ llvm::Value* load_op(Context const& c, RegOffset reg_offset, addr_fn_t addr_mode
 
 llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
     auto* const fn = add ? c.add_fn : c.sub_fn;
     auto* const call = c.builder->CreateCall(fn, {c.fn->getArg(CPU), data});
     call->setCallingConv(llvm::CallingConv::Fast);
@@ -891,7 +968,7 @@ llvm::Value* add_sub_op(Context const& c, addr_fn_t addr_mode, bool add)
 
 llvm::Value* BIT_op(Context const& c, addr_fn_t addr_mode)
 {
-    auto const [addr, data, cycles] = addr_mode(c, true, false);
+    auto const [addr, data, cycles, memory_region] = addr_mode(c, true, false);
 
     auto* const n_bit = c.builder->CreateAnd(data, int_const(c, 0x80_b));
     auto* const new_n =
