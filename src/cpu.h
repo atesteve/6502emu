@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <filesystem>
+#include <ostream>
 
 namespace emu {
 
@@ -73,6 +74,19 @@ struct CPU {
     SR SR{};
 
     constexpr auto operator<=>(CPU const&) const noexcept = default;
+
+    friend std::ostream& operator<<(std::ostream& o, CPU const& cpu)
+    {
+        o << fmt::format(
+            "[PC: {:#04x}, SP: {:#02x}, A: {:#02x}, X: {:#02x}, Y: {:#02x}, SR: {:#02x}",
+            cpu.PC,
+            cpu.SP,
+            cpu.A,
+            cpu.X,
+            cpu.Y,
+            static_cast<byte_t>(cpu.SR));
+        return o;
+    }
 };
 
 enum class MemoryRegionType : uint8_t {
