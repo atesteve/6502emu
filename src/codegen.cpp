@@ -1739,6 +1739,10 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                       fmt::format("fn_{:04x}", flow.begin()->first),
                                       module.get());
 
+    for (auto i = 0u; i < fn->getFunctionType()->getNumParams(); ++i) {
+        fn->addParamAttr(i, llvm::Attribute::NoAlias);
+    }
+
     auto* const entry_block = llvm::BasicBlock::Create(*context, "", fn);
     builder->SetInsertPoint(entry_block);
     auto* const cycle_counter = builder->CreateAlloca(int_type<uint64_t>(*context));
