@@ -14,6 +14,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/ValueSymbolTable.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/MDBuilder.h>
 
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -113,17 +114,21 @@ llvm::IntegerType* int_type(llvm::LLVMContext& context)
 template<typename Int>
 llvm::ConstantInt* int_const(llvm::LLVMContext& context, Int value)
 {
-    auto* const type = int_type<Int>(context);
-    if constexpr (std::is_same_v<std::decay_t<Int>, byte_t>) {
-        return llvm::ConstantInt::get(type, static_cast<uint8_t>(value));
-    } else if constexpr (std::is_same_v<std::decay_t<Int>, sbyte_t>) {
-        return llvm::ConstantInt::get(type, static_cast<int8_t>(value));
-    } else if constexpr (std::is_same_v<std::decay_t<Int>, word_t>) {
-        return llvm::ConstantInt::get(type, static_cast<uint16_t>(value));
-    } else if constexpr (std::is_same_v<std::decay_t<Int>, sword_t>) {
-        return llvm::ConstantInt::get(type, static_cast<int16_t>(value));
+    if constexpr (std::is_enum_v<Int>) {
+        return int_const(context, std::to_underlying(value));
     } else {
-        return llvm::ConstantInt::get(type, value);
+        auto* const type = int_type<Int>(context);
+        if constexpr (std::is_same_v<std::decay_t<Int>, byte_t>) {
+            return llvm::ConstantInt::get(type, static_cast<uint8_t>(value));
+        } else if constexpr (std::is_same_v<std::decay_t<Int>, sbyte_t>) {
+            return llvm::ConstantInt::get(type, static_cast<int8_t>(value));
+        } else if constexpr (std::is_same_v<std::decay_t<Int>, word_t>) {
+            return llvm::ConstantInt::get(type, static_cast<uint16_t>(value));
+        } else if constexpr (std::is_same_v<std::decay_t<Int>, sword_t>) {
+            return llvm::ConstantInt::get(type, static_cast<int16_t>(value));
+        } else {
+            return llvm::ConstantInt::get(type, value);
+        }
     }
 }
 
@@ -147,9 +152,14 @@ llvm::Value* expect(Context const& c, llvm::Value* value, Int expected_value)
 }
 
 template<typename Int>
-llvm::Value* load(Context const& c, llvm::Value* ptr)
+llvm::LoadInst* load(Context const& c, llvm::Value* ptr, bool invariant = false)
 {
-    return c.builder->CreateAlignedLoad(int_type<Int>(c), ptr, llvm::Align::Of<Int>());
+    llvm::LoadInst* const ret =
+        c.builder->CreateAlignedLoad(int_type<Int>(c), ptr, llvm::Align::Of<Int>());
+    if (invariant) {
+        ret->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(*c.context, {}));
+    }
+    return ret;
 }
 
 template<typename Int>
@@ -227,6 +237,26 @@ void return_function(Context const& c, llvm::Value* pc_value)
     c.builder->CreateRet(cycles);
 }
 
+llvm::Value* read_memory_region_type(Context const& c, llvm::Value* addr)
+{
+    auto const memory_region_bits = c.emu->get_bus().MEMORY_REGION_BITS;
+
+    auto* const shifted_addr =
+        c.builder->CreateLShr(addr, int_const<uint16_t>(c, memory_region_bits));
+    auto* const bus_type_p = c.builder->CreateGEP(
+        llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000 >> memory_region_bits),
+        c.fn->getArg(REGION_TYPE),
+        {int_const(c, 0), shifted_addr});
+    auto* const ret = load<uint8_t>(c, bus_type_p, true);
+    llvm::MDBuilder mdb{*c.context};
+    ret->setMetadata(
+        llvm::LLVMContext::MD_range,
+        mdb.createRange(int_const<uint8_t>(c, std::to_underlying(MemoryRegionType::RAM)),
+                        int_const<uint8_t>(c, std::to_underlying(MemoryRegionType::DEVICE) + 1)));
+
+    return ret;
+}
+
 llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
 {
     word_t const addr_val{addr->getZExtValue()};
@@ -241,7 +271,7 @@ llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
         return load<uint8_t>(c, p);
     }
     case ROM: {
-        // If ROM, we know the address now, so can return the value as a constant.
+        // If ROM, we know the address now, so we can return the value as a constant.
         return int_const(c, c.emu->get_bus().read_memory(addr_val));
     }
     case DEVICE: {
@@ -256,41 +286,53 @@ llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
     std::unreachable();
 }
 
-llvm::Value* read_bus(Context const& c, llvm::Value* addr)
+llvm::Value* read_bus(Context const& c, llvm::Value* addr, bool force_ram = false)
 {
-    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr); const_addr && !force_ram) {
         return read_bus(c, const_addr);
     }
 
-    auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
-    auto* const eq_0 =
-        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
-
-    auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-    auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-    auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-
-    c.builder->CreateCondBr(expect(c, eq_0, true), regular_memory_block, mapped_memory_block);
-
-    // If regular memory, just read from memory
-    c.builder->SetInsertPoint(regular_memory_block);
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                          c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
-    auto* const value_read = load<uint8_t>(c, p);
-    store<uint8_t>(c, value_read, c.aux_8b_ptr);
-    c.builder->CreateBr(continue_block);
+
+    if (force_ram) {
+        return load<uint8_t>(c, p);
+    }
+
+    auto* const region_type = read_memory_region_type(c, addr);
+
+    auto* const ram_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const rom_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const device_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const default_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+    auto* const switch_bus =
+        c.builder->CreateSwitch(expect(c, region_type, MemoryRegionType::RAM), default_block, 3);
+    switch_bus->addCase(int_const(c, MemoryRegionType::RAM), ram_block);
+    switch_bus->addCase(int_const(c, MemoryRegionType::ROM), rom_block);
+    switch_bus->addCase(int_const(c, MemoryRegionType::DEVICE), device_block);
+
+    // If RAM, just read from memory
+    c.builder->SetInsertPoint(ram_block);
+    store<uint8_t>(c, load<uint8_t>(c, p), c.aux_8b_ptr);
+    c.builder->CreateBr(default_block);
+
+    // If ROM, read from memory but give an invariant hint.
+    c.builder->SetInsertPoint(rom_block);
+    store<uint8_t>(c, load<uint8_t>(c, p, true), c.aux_8b_ptr);
+    c.builder->CreateBr(default_block);
 
     // If mapped memory, perform a call to the bus object
-    c.builder->SetInsertPoint(mapped_memory_block);
+    c.builder->SetInsertPoint(device_block);
     auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     store<uint8_t>(c, call, c.aux_8b_ptr);
-    c.builder->CreateBr(continue_block);
+    c.builder->CreateBr(default_block);
 
     // Load produced value and continue
-    c.builder->SetInsertPoint(continue_block);
+    c.builder->SetInsertPoint(default_block);
     return load<uint8_t>(c, c.aux_8b_ptr);
 }
 
@@ -308,39 +350,46 @@ void write_bus(Context const& c, llvm::ConstantInt* addr, llvm::Value* value)
     }
 }
 
-void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value)
+void write_bus(Context const& c, llvm::Value* addr, llvm::Value* value, bool force_ram = false)
 {
-    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr)) {
+    if (auto* const_addr = llvm::dyn_cast<llvm::ConstantInt>(addr); const_addr && !force_ram) {
         return write_bus(c, const_addr, value);
     }
 
-    auto* const masked_addr = c.builder->CreateAnd(addr, int_const(c, 0x8000_w));
-    auto* const eq_0 =
-        c.builder->CreateCmp(llvm::CmpInst::Predicate::ICMP_EQ, masked_addr, int_const(c, 0_w));
-
-    auto* const regular_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-    auto* const mapped_memory_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-    auto* const continue_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
-
-    c.builder->CreateCondBr(expect(c, eq_0, true), regular_memory_block, mapped_memory_block);
-
-    // If regular memory, just write to memory
-    c.builder->SetInsertPoint(regular_memory_block);
     auto* const p = c.builder->CreateGEP(llvm::ArrayType::get(int_type<uint8_t>(c), 0x10000),
                                          c.fn->getArg(MEMORY),
                                          {int_const(c, 0), addr});
+
+    if (force_ram) {
+        return store<uint8_t>(c, value, p);
+    }
+
+    auto* const region_type = read_memory_region_type(c, addr);
+
+    auto* const ram_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const device_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+    auto* const default_block = llvm::BasicBlock::Create(*c.context, "", c.fn);
+
+    auto* const switch_bus =
+        c.builder->CreateSwitch(expect(c, region_type, MemoryRegionType::RAM), default_block, 3);
+    switch_bus->addCase(int_const(c, MemoryRegionType::RAM), ram_block);
+    switch_bus->addCase(int_const(c, MemoryRegionType::ROM), default_block); // ROM does nothing
+    switch_bus->addCase(int_const(c, MemoryRegionType::DEVICE), device_block);
+
+    // If RAM, just write to memory
+    c.builder->SetInsertPoint(ram_block);
     store<uint8_t>(c, value, p);
-    c.builder->CreateBr(continue_block);
+    c.builder->CreateBr(default_block);
 
     // If mapped memory, perform a call to the bus object
-    c.builder->SetInsertPoint(mapped_memory_block);
+    c.builder->SetInsertPoint(device_block);
     auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
     call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
         *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-    c.builder->CreateBr(continue_block);
+    c.builder->CreateBr(default_block);
 
     // And just continue
-    c.builder->SetInsertPoint(continue_block);
+    c.builder->SetInsertPoint(default_block);
 }
 
 void add_cycle_counter(Context const& c, llvm::Value* value);
@@ -375,7 +424,7 @@ void make_function_call(Context const& c, llvm::Value* addr, word_t next_addr)
 llvm::Value* read_1_byte_argument(Context const& c)
 {
     if (c.support_self_mod) {
-        return read_bus(c, int_const(c, c.inst->pc + 1_w));
+        return read_bus(c, int_const(c, c.inst->pc + 1_w), true);
     } else {
         return int_const(c, c.inst->bytes[1]);
     }
@@ -384,8 +433,8 @@ llvm::Value* read_1_byte_argument(Context const& c)
 llvm::Value* read_2_byte_argument(Context const& c)
 {
     if (c.support_self_mod) {
-        auto* const lo_byte = read_bus(c, int_const(c, c.inst->pc + 1_w));
-        auto* const hi_byte = read_bus(c, int_const(c, c.inst->pc + 2_w));
+        auto* const lo_byte = read_bus(c, int_const(c, c.inst->pc + 1_w), true);
+        auto* const hi_byte = read_bus(c, int_const(c, c.inst->pc + 2_w), true);
         return assemble(c, lo_byte, hi_byte);
     } else {
         return int_const(c, assemble(c.inst->bytes[1], c.inst->bytes[2]));
@@ -598,7 +647,7 @@ void push(Context const& c, llvm::Value* value)
     auto* const sp = load_reg(c, SP);
     auto* const sp_16 = c.builder->CreateZExt(sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(sp_16, int_const(c, STACK_BASE));
-    write_bus(c, stack_addr, value);
+    write_bus(c, stack_addr, value, true);
     auto* const decreased_sp = c.builder->CreateSub(sp, int_const(c, 1_b));
     store_reg(c, SP, decreased_sp);
 }
@@ -610,7 +659,7 @@ llvm::Value* pop(Context const& c)
     store_reg(c, SP, increased_sp);
     auto* const increased_sp_16 = c.builder->CreateZExt(increased_sp, int_type<uint16_t>(c));
     auto* const stack_addr = c.builder->CreateAdd(increased_sp_16, int_const(c, STACK_BASE));
-    return read_bus(c, stack_addr);
+    return read_bus(c, stack_addr, true);
 }
 
 llvm::Value* load_sr(Context const& c)
