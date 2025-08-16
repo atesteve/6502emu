@@ -294,10 +294,7 @@ llvm::Value* read_bus(Context const& c, llvm::ConstantInt* addr)
     }
     case DEVICE: {
         // If mapped memory, perform a call to the bus object
-        auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
-        call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-            *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-        return call;
+        return c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
     }
     };
 
@@ -324,10 +321,7 @@ llvm::Value* read_bus(Context const& c,
         case ROM:
             return load<uint8_t>(c, p, true);
         case DEVICE:
-            auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
-            call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-                *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
-            return call;
+            return c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
         }
     }
 
@@ -357,8 +351,6 @@ llvm::Value* read_bus(Context const& c,
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(device_block);
     auto* const call = c.builder->CreateCall(c.read_bus_fn, {c.fn->getArg(BUS), addr});
-    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
     store<uint8_t>(c, call, c.aux_8b_ptr);
     c.builder->CreateBr(default_block);
 
@@ -375,9 +367,7 @@ void write_bus(Context const& c, llvm::ConstantInt* addr, llvm::Value* value)
                                              {int_const(c, 0), addr});
         store<uint8_t>(c, value, p);
     } else {
-        auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
-        call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-            *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+        c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
     }
 }
 
@@ -402,10 +392,7 @@ void write_bus(Context const& c,
         case ROM:
             return; // Do nothing
         case DEVICE:
-            auto* const call =
-                c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
-            call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-                *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+            c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
             return;
         }
     }
@@ -429,9 +416,7 @@ void write_bus(Context const& c,
 
     // If mapped memory, perform a call to the bus object
     c.builder->SetInsertPoint(device_block);
-    auto* const call = c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
-    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+    c.builder->CreateCall(c.write_bus_fn, {c.fn->getArg(BUS), addr, value});
     c.builder->CreateBr(default_block);
 
     // And just continue
@@ -497,12 +482,9 @@ auto* same_page(Context const& c, llvm::Value* addr_1, llvm::Value* addr_2)
 template<typename... T>
 void call_printf(Context const& c, const char* format, T*... args)
 {
-    auto* const call =
-        c.builder->CreateCall(c.printf_fn,
-                              {int_const(c, reinterpret_cast<uintptr_t>(format)),
-                               c.builder->CreateZExt(args, int_type<uintptr_t>(c))...});
-    call->addFnAttr(llvm::Attribute::getWithMemoryEffects(
-        *c.context, llvm::MemoryEffects::inaccessibleMemOnly()));
+    c.builder->CreateCall(c.printf_fn,
+                          {int_const(c, reinterpret_cast<uintptr_t>(format)),
+                           c.builder->CreateZExt(args, int_type<uintptr_t>(c))...});
 }
 
 std::optional<MemoryRegionType>
@@ -1712,11 +1694,15 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
                                                llvm::Function::LinkageTypes::ExternalLinkage,
                                                "read_bus",
                                                module.get());
+    read_bus_fn->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *context, llvm::MemoryEffects::inaccessibleMemOnly()));
 
     auto* write_bus_fn = llvm::Function::Create(create_bus_write_function_type(*context, bus_type),
                                                 llvm::Function::LinkageTypes::ExternalLinkage,
                                                 "write_bus",
                                                 module.get());
+    write_bus_fn->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *context, llvm::MemoryEffects::inaccessibleMemOnly()));
 
     auto* call_function_fn =
         llvm::Function::Create(create_call_function_function_type(*context, emu_type),
@@ -1732,6 +1718,8 @@ std::unique_ptr<llvm::Module> codegen(llvm::orc::ThreadSafeContext tsc,
 
     auto* printf_fn = llvm::Function::Create(
         printf_type, llvm::Function::LinkageTypes::ExternalLinkage, "printf", module.get());
+    printf_fn->addFnAttr(llvm::Attribute::getWithMemoryEffects(
+        *context, llvm::MemoryEffects::inaccessibleMemOnly()));
 
     auto* fn_type = create_jit_function_type(*context, cpu_type, bus_type, emu_type);
     auto* fn = llvm::Function::Create(fn_type,
