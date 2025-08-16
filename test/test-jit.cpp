@@ -112,12 +112,12 @@ protected:
     std::unique_ptr<llvm::orc::LLJIT> _jit;
     emu::CPU _cpu{};
     emu::Bus _bus{};
-    emu::Emulator _em{0};
+    emu::Emulator _em{3};
 };
 
 TEST_P(TestJitCodegen, Test)
 {
-    auto const op_level = llvm::OptimizationLevel::O0;
+    auto const op_level = llvm::OptimizationLevel::O3;
 
     auto base_module = emu::build_base(op_level);
 
@@ -207,16 +207,16 @@ static std::vector<ParamType> get_test_cases()
         },
         {
             .name = "Test STA abs,X",
-            .instructions = {0x9d_b, 0xaa_b, 0x55_b},
-            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .instructions = {0x9d_b, 0xaa_b, 0x03_b},
+            .expected_data = {{.offset = 0x3bb_w, .data = {0x55_b}}},
             .expected_cycles = 5,
             .initial_cpu_state = {.A = 0x55_b, .X = 0x11_b},
             .expected_cpu_state = {.A = 0x55_b, .X = 0x11_b},
         },
         {
             .name = "Test STA abs,Y",
-            .instructions = {0x99_b, 0xaa_b, 0x55_b},
-            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .instructions = {0x99_b, 0xaa_b, 0x03_b},
+            .expected_data = {{.offset = 0x3bb_w, .data = {0x55_b}}},
             .expected_cycles = 5,
             .initial_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
             .expected_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
@@ -224,8 +224,8 @@ static std::vector<ParamType> get_test_cases()
         {
             .name = "Test STA (indirect,X)",
             .instructions = {0x81_b, 0xaa_b},
-            .data = {{.offset = 0xbb_w, .data = {0xaa_b, 0x55_b}}},
-            .expected_data = {{.offset = 0x55aa_w, .data = {0x55_b}}},
+            .data = {{.offset = 0xbb_w, .data = {0xaa_b, 0x03_b}}},
+            .expected_data = {{.offset = 0x3aa_w, .data = {0x55_b}}},
             .expected_cycles = 6,
             .initial_cpu_state = {.A = 0x55_b, .X = 0x11_b},
             .expected_cpu_state = {.A = 0x55_b, .X = 0x11_b},
@@ -233,8 +233,8 @@ static std::vector<ParamType> get_test_cases()
         {
             .name = "Test STA (indirect),Y",
             .instructions = {0x91_b, 0xaa_b},
-            .data = {{.offset = 0xaa_w, .data = {0xaa_b, 0x55_b}}},
-            .expected_data = {{.offset = 0x55bb_w, .data = {0x55_b}}},
+            .data = {{.offset = 0xaa_w, .data = {0xaa_b, 0x03_b}}},
+            .expected_data = {{.offset = 0x3bb_w, .data = {0x55_b}}},
             .expected_cycles = 6,
             .initial_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
             .expected_cpu_state = {.A = 0x55_b, .Y = 0x11_b},
